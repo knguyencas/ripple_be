@@ -4,30 +4,48 @@ import prisma from '../models/prisma';
 import { RegisterInput, LoginInput } from '../types';
 
 export const registerUser = async (input: RegisterInput) => {
-  const { email, username, password, city, ageGroup } = input;
+  const { email, username, password, ageGroup } = input;
 
   const existing = await prisma.user.findFirst({
-    where: { OR: [{ email }, { username }] }
+    where: {
+      OR: [
+        { username },
+        ...(email ? [{ email }] : [])
+      ]
+    }
   });
-  if (existing) throw new Error('Email hoặc username đã tồn tại');
+  if (existing) throw new Error('Username hoặc email đã tồn tại');
 
   const hashed = await bcrypt.hash(password, 10);
   const user = await prisma.user.create({
-    data: { email, username, password: hashed, city, ageGroup }
+    data: {
+      username,
+      password: hashed,
+      ageGroup,
+      ...(email ? { email } : {})
+    }
   });
 
   const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET!, {
     expiresIn: '7d'
   });
 
-  return { token, user: { id: user.id, email, username } };
+  return {
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      displayName: user.displayName
+    }
+  };
 };
 
 export const loginUser = async (input: LoginInput) => {
-  const { email, password } = input;
+  const { username, password } = input;
 
-  const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) throw new Error('Email không tồn tại');
+  const user = await prisma.user.findUnique({ where: { username } });
+  if (!user) throw new Error('Username không tồn tại');
 
   const valid = await bcrypt.compare(password, user.password);
   if (!valid) throw new Error('Sai mật khẩu');
@@ -36,5 +54,13 @@ export const loginUser = async (input: LoginInput) => {
     expiresIn: '7d'
   });
 
-  return { token, user: { id: user.id, email, username: user.username } };
+  return {
+    token,
+    user: {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      displayName: user.displayName
+    }
+  };
 };

@@ -1,13 +1,12 @@
 export interface RegisterInput {
-  email: string;
+  email?: string;
   username: string;
   password: string;
-  city?: string;
   ageGroup?: string;
 }
 
 export interface LoginInput {
-  email: string;
+  username: string;
   password: string;
 }
 
