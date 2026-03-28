@@ -1,131 +1,103 @@
+import { Request, Response } from 'express';
 import Groq from 'groq-sdk';
-import axios from 'axios';
-import { Response } from 'express';
-import { AuthRequest } from '../middlewares/auth.middleware';
+import { PrismaClient } from '@prisma/client';
 
-let groqClient: Groq | null = null;
+const prisma = new PrismaClient();
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-function getGroq() {
-  if (!groqClient) {
-    groqClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  }
-  return groqClient;
-}
-const NLP_SERVICE_URL = process.env.NLP_SERVICE_URL || 'http://localhost:8000';
-
-async function analyzeEmotion(text: string) {
-  try {
-    const res = await axios.post(`${NLP_SERVICE_URL}/analyze`, { text });
-    return res.data;
-  } catch {
-    return null;
-  }
+interface AuthRequest extends Request {
+  userId?: string;
 }
 
-function buildSystemPrompt(nlpResult: any, userContext?: any) {
-  const recentMood = userContext?.recentMood || nlpResult?.emotion || 'unknown';
-  const avgPHQ9    = userContext?.avgPHQ9    || nlpResult?.phq9_estimate || null;
-  const riskLevel  = userContext?.riskLevel  || nlpResult?.risk_level || 'low';
-  const trend      = userContext?.trend      || null;
+function buildSystemPrompt(userContext?: any): string {
+  const lang = userContext?.lang || 'vi';
+  const isVi = lang !== 'en';
 
-  const contextBlock = nlpResult || userContext ? `
-[User context internal only, do not reveal to user]
-- Current emotion: ${recentMood}
-- Mood score (PHQ-9 proxy): ${avgPHQ9 ? `${avgPHQ9.toFixed(1)}/27` : 'unknown'}
-- Risk level: ${riskLevel}
-- Mood trend: ${trend || 'unknown'}
-- Valence: ${nlpResult?.valence ?? 'unknown'}
+  const contextBlock = userContext ? `
+USER CONTEXT
+Mood trend (last 5 days): ${userContext.trend ?? 'unknown'}
+Average mood score: ${userContext.avgMood ?? 'unknown'}/10
+Recent emotions: ${userContext.recentEmotions?.join(', ') || 'unknown'}
+Risk level: ${userContext.riskLevel || 'low'}
 ` : '';
 
-  const crisisNote = riskLevel === 'crisis'
-    ? `
-[Crisis protocol]
-The user may be showing signs of severe distress.
-- Gently acknowledge their pain
-- Encourage them to reach out to someone they trust or a professional
-- Do NOT attempt to resolve the crisis yourself
-`
-    : riskLevel === 'high'
-    ? `
-[High distress protocol]
-The user seems to be struggling significantly.
-- Show deep care and presence
-- Gently ask if they have someone they can talk to
-- Reflect patterns softly without labeling
-`
+  const distressNote = userContext?.riskLevel === 'high'
+    ? (isVi
+        ? '\n User có dấu hiệu distress cao thì nhẹ nhàng gợi ý tìm kiếm hỗ trợ từ người thân hoặc chuyên gia.'
+        : '\n User shows high distress thì gently encourage seeking support from loved ones or professionals.')
     : '';
 
-  return `You are Sora — a warm, emotionally intelligent companion in the Ripple mental wellness app.
-You support users in both Vietnamese and English. Always reply in the same language the user writes in.
+  return `You are an emotionally intelligent AI companion in the Ripple app, designed to support users in tracking and understanding their emotions.
 
-[Your goals]
+Your goals:
 - Help users feel heard and understood
 - Gently guide them to reflect on their emotions
-- Encourage self-awareness, not dependency on you
+- Encourage self-awareness, not dependency
+- Avoid giving harmful advice or making diagnoses
 
-[You are NOT]
-- A therapist or doctor
-- Someone who gives medical or clinical conclusions
-- A replacement for real human connection
+You are NOT a therapist, doctor, or clinical professional. Never make clinical conclusions.
 
-[Tone]
-- Warm, calm, non-judgmental
-- Soft and slightly reflective
-- Never overly cheerful or robotic
-- Never dismissive or minimizing
+Tone: Warm, calm, non-judgmental. Soft and slightly reflective. Never overly cheerful or robotic.
 
-[Style]
-- Use short, natural sentences
-- Ask one gentle open-ended question at a time
-- Mirror the user's emotional tone subtly
-- Avoid toxic positivity ("You'll be fine!", "Just think positive!")
+Style:
+- Short, natural sentences
+- Ask gentle open-ended questions
+- Mirror the user's emotions subtly
+- Respond in the same language as the user (Vietnamese or English)
 
-[Response structure, follow this order]
-1. Acknowledge the user's feelings first
-2. Reflect what you understand from their message
-3. Offer a gentle question or perspective — not heavy advice
-4. If signs of distress: gently note that real-life support matters
-
-[Patterns to watch, do NOT label as illness]
-If user shows repeated signs of:
-- hopelessness or loss of meaning
-- persistent fatigue or low energy
-- loss of interest in things they used to enjoy
-- negative self-worth
-
-Then:
-- Softly reflect the pattern you notice ("It sounds like things have felt heavy for a while...")
-- Gently encourage connection with people around them or a professional
-- Never diagnose or use clinical terms like "depression", "anxiety disorder"
-
-[Language rule]
-- If user writes in Vietnamese, reply entirely in Vietnamese
-- If user writes in English, reply entirely in English
-- Never mix languages in one reply
-${contextBlock}${crisisNote}`;
+Response guidelines:
+1. Acknowledge feelings first
+2. Reflect what you understand
+3. Offer a gentle question or perspective, not heavy advice
+4. Avoid toxic positivity, dismissing feelings, or labeling mental illness
+5. If user shows hopelessness, loss of interest, fatigue, or negative self-worth, please gently reflect the pattern without labeling
+6. If severe distress then encourage real-life support
+${contextBlock}${distressNote}`;
 }
 
 export const chatWithAI = async (req: AuthRequest, res: Response) => {
   try {
-    const { messages, userContext } = req.body;
+    const userId = req.userId!;
+    const { messages } = req.body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages are required' });
     }
 
-    // Lấy message cuối của user để analyze
-    const lastUserMsg = [...messages]
-      .reverse()
-      .find((m: any) => m.role === 'user');
+    // Lấy context từ logs gần nhất
+    const recentLogs = await prisma.personalLog.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
 
-    const nlpResult = lastUserMsg
-      ? await analyzeEmotion(lastUserMsg.content)
-      : null;
+    let userContext: any = null;
+    if (recentLogs.length > 0) {
+      const scores = recentLogs.map(l => l.moodScore);
+      const avgMood = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const trend = scores.length >= 2
+        ? (scores[0] > scores[scores.length - 1] ? 'improving' : 'declining')
+        : 'stable';
+      const recentEmotions = recentLogs
+        .map(l => l.nlpEmotion)
+        .filter(Boolean) as string[];
+      const riskLevel = recentLogs.find(l => l.alertLevel === 'high')
+        ? 'high'
+        : recentLogs.find(l => l.alertLevel === 'moderate')
+          ? 'moderate'
+          : 'low';
 
-    // Build system prompt với NLP + user context
-    const systemPrompt = buildSystemPrompt(nlpResult, userContext);
+      userContext = {
+        avgMood: Math.round(avgMood * 10) / 10,
+        trend,
+        recentEmotions,
+        riskLevel,
+      };
+    }
 
-    const completion = await getGroq().chat.completions.create({
+    const systemPrompt = buildSystemPrompt(userContext);
+
+    const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: systemPrompt },
@@ -137,10 +109,7 @@ export const chatWithAI = async (req: AuthRequest, res: Response) => {
 
     const reply = completion.choices[0]?.message?.content || '';
 
-    return res.json({
-      reply,
-      nlp: nlpResult,
-    });
+    return res.json({ reply });
   } catch (error: any) {
     console.error('Chat error:', error);
     return res.status(500).json({ error: 'AI service unavailable' });
