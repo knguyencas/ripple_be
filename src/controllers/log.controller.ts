@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { analyzeText, mapAlertLevel } from '../services/nlp.service';
 
 const prisma = new PrismaClient();
 
@@ -44,6 +45,25 @@ export const createLog = async (req: AuthRequest, res: Response) => {
           hour: now.getHours(),
           dayOfWeek: now.getDay(),
         },
+      });
+    }
+
+    // NLP analyze async
+    if (note && note.trim().length >= 5) {
+      analyzeText(note, userId).then(async (nlp) => {
+        if (!nlp) return;
+        await prisma.personalLog.update({
+          where: { id: log.id },
+          data: {
+            nlpScore:   nlp.phq_score,
+            nlpEmotion: nlp.severity,
+            alertLevel: mapAlertLevel(nlp),
+          },
+        });
+
+        if (nlp.risk_flag) {
+          console.warn(`[RISK] userId=${userId} | severity=${nlp.severity} | c9=${nlp.c9_ideation}`);
+        }
       });
     }
 
