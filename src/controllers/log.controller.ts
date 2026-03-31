@@ -160,6 +160,66 @@ export const getRecentLogs = async (req: AuthRequest, res: Response) => {
   }
 };
 
+// GET /api/logs/:id
+export const getLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = req.params['id'] as string;
+    const log = await prisma.personalLog.findFirst({
+      where: { id, userId: req.userId! },
+    });
+    if (!log) return res.status(404).json({ error: 'Log not found' });
+    return res.json(log);
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to get log' });
+  }
+};
+
+// PUT /api/logs/:id
+export const updateLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const id = req.params['id'] as string;
+    const { mood, moodScore, factors, note } = req.body;
+
+    const existing = await prisma.personalLog.findFirst({
+      where: { id, userId: req.userId! },
+    });
+    if (!existing) return res.status(404).json({ error: 'Log not found' });
+
+    const updated = await prisma.personalLog.update({
+      where: { id },
+      data: {
+        ...(mood && { mood }),
+        ...(moodScore !== undefined && { moodScore }),
+        ...(factors && { factors }),
+        ...(note !== undefined && { note }),
+      },
+    });
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to update log' });
+  }
+};
+
+// GET /api/logs/today
+export const getTodayLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    const log = await prisma.personalLog.findFirst({
+      where: {
+        userId: req.userId!,
+        createdAt: { gte: start, lte: end },
+      },
+    });
+    return res.json({ log });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to check today log' });
+  }
+};
+
 async function updateStreak(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) return;
