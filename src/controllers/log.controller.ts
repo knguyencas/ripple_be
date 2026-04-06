@@ -30,7 +30,6 @@ export const createLog = async (req: AuthRequest, res: Response) => {
 
     await updateStreak(userId);
 
-    // Save anonymous log for community stats
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (user) {
       const now = new Date();
@@ -48,7 +47,6 @@ export const createLog = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // NLP analyze async
     if (note && note.trim().length >= 5) {
       analyzeText(note, userId).then(async (nlp) => {
         if (!nlp) return;
@@ -111,7 +109,6 @@ export const getStats = async (req: AuthRequest, res: Response) => {
 
     const avgMood = logs.reduce((sum, l) => sum + l.moodScore, 0) / logs.length;
 
-    // Last 7 days data
     const weeklyData = Array.from({ length: 7 }, (_, i) => {
       const date = new Date();
       date.setDate(date.getDate() - (6 - i));
@@ -142,7 +139,7 @@ export const getStats = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// GET /api/logs/recent 
+// GET /api/logs/recent
 export const getRecentLogs = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
@@ -166,6 +163,12 @@ export const getLog = async (req: AuthRequest, res: Response) => {
     const id = req.params['id'] as string;
     const log = await prisma.personalLog.findFirst({
       where: { id, userId: req.userId! },
+      include: {
+        audioRecordings: {
+          orderBy: { createdAt: 'asc' },
+          select: { id: true, url: true, label: true, createdAt: true },
+        },
+      },
     });
     if (!log) return res.status(404).json({ error: 'Log not found' });
     return res.json(log);

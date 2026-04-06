@@ -22,10 +22,11 @@ model User {
   lastLogDate DateTime?
   createdAt   DateTime  @default(now())
 
-  personalLogs  PersonalLog[]
-  anonymousLogs AnonymousLog[]
-  stepCounts    StepCount[]
-  sleepSessions SleepSession[]
+  personalLogs    PersonalLog[]
+  anonymousLogs   AnonymousLog[]
+  stepCounts      StepCount[]
+  sleepSessions   SleepSession[]
+  audioRecordings AudioRecording[]
 }
 
 model PersonalLog {
@@ -40,7 +41,21 @@ model PersonalLog {
   alertLevel String?
   createdAt  DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user            User             @relation(fields: [userId], references: [id])
+  audioRecordings AudioRecording[]
+}
+
+model AudioRecording {
+  id        String   @id @default(cuid())
+  logId     String
+  userId    String
+  url       String
+  publicId  String
+  label     String
+  createdAt DateTime @default(now())
+
+  log  PersonalLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+  user User        @relation(fields: [userId], references: [id])
 }
 
 model AnonymousLog {
