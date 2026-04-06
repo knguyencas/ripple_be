@@ -56,7 +56,7 @@ export const saveSleep = async (req: AuthRequest, res: Response) => {
     const session = await prisma.sleepSession.create({
       data: {
         userId,
-        bedtime: new Date(bedtime),
+        bedtime:  new Date(bedtime),
         wakeTime: new Date(wakeTime),
         duration,
       },
@@ -69,14 +69,14 @@ export const saveSleep = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// GET /api/health/summary?days=7
+// GET /api/health/summary
 export const getSummary = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
     const days = Math.min(Math.max(parseInt((req.query['days'] as string) || '7', 10), 1), 90);
 
     const today = toDateOnly(new Date());
-    const from = new Date(today);
+    const from  = new Date(today);
     from.setUTCDate(today.getUTCDate() - (days - 1));
 
     const [stepRecords, sleepRecords] = await Promise.all([
@@ -94,42 +94,40 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
     ]);
 
     const dailyData = Array.from({ length: days }, (_, i) => {
-      const date = new Date(from);
+      const date    = new Date(from);
       date.setUTCDate(from.getUTCDate() + i);
       const dateStr = date.toISOString().split('T')[0];
 
       const stepRecord = stepRecords.find(
-        (s) => s.date.toISOString().split('T')[0] === dateStr
+        s => s.date.toISOString().split('T')[0] === dateStr
       );
 
-      const daySleepSessions = sleepRecords.filter(
-        (s) => s.wakeTime.toISOString().split('T')[0] === dateStr
+      const daySleepSessions  = sleepRecords.filter(
+        s => s.wakeTime.toISOString().split('T')[0] === dateStr
       );
       const totalSleepMinutes = daySleepSessions.reduce((sum, s) => sum + s.duration, 0);
 
       return {
-        date: dateStr,
-        steps: stepRecord?.steps ?? null,
-        sleepMinutes: daySleepSessions.length > 0 ? totalSleepMinutes : null,
+        date:          dateStr,
+        steps:         stepRecord?.steps ?? null,
+        sleepMinutes:  daySleepSessions.length > 0 ? totalSleepMinutes : null,
         sleepSessions: daySleepSessions.length,
       };
     });
 
-    const stepsWithData = dailyData.filter((d) => d.steps !== null);
-    const sleepWithData = dailyData.filter((d) => d.sleepMinutes !== null);
+    const stepsWithData = dailyData.filter(d => d.steps !== null);
+    const sleepWithData = dailyData.filter(d => d.sleepMinutes !== null);
 
     return res.json({
       days,
       dailyData,
       averages: {
-        steps:
-          stepsWithData.length > 0
-            ? Math.round(stepsWithData.reduce((s, d) => s + (d.steps ?? 0), 0) / stepsWithData.length)
-            : null,
-        sleepMinutes:
-          sleepWithData.length > 0
-            ? Math.round(sleepWithData.reduce((s, d) => s + (d.sleepMinutes ?? 0), 0) / sleepWithData.length)
-            : null,
+        steps: stepsWithData.length > 0
+          ? Math.round(stepsWithData.reduce((s, d) => s + (d.steps ?? 0), 0) / stepsWithData.length)
+          : null,
+        sleepMinutes: sleepWithData.length > 0
+          ? Math.round(sleepWithData.reduce((s, d) => s + (d.sleepMinutes ?? 0), 0) / sleepWithData.length)
+          : null,
       },
     });
   } catch (error) {
@@ -141,9 +139,9 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
 // GET /api/health/today
 export const getToday = async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId!;
+    const userId     = req.userId!;
     const todayStart = toDateOnly(new Date());
-    const todayEnd = new Date(todayStart.getTime() + 86400000);
+    const todayEnd   = new Date(todayStart.getTime() + 86400000);
 
     const [stepRecord, sleepSessions] = await Promise.all([
       prisma.stepCount.findUnique({
@@ -159,10 +157,10 @@ export const getToday = async (req: AuthRequest, res: Response) => {
     ]);
 
     return res.json({
-      date: todayStart.toISOString().split('T')[0],
+      date:  todayStart.toISOString().split('T')[0],
       steps: stepRecord?.steps ?? null,
       sleep: {
-        sessions: sleepSessions,
+        sessions:     sleepSessions,
         totalMinutes: sleepSessions.reduce((sum, s) => sum + s.duration, 0),
       },
     });
