@@ -3,15 +3,15 @@ import Groq from 'groq-sdk';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const groq   = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 interface AuthRequest extends Request {
   userId?: string;
 }
 
 function buildSystemPrompt(userContext?: any): string {
-  const lang = userContext?.lang || 'vi';
-  const isVi = lang !== 'en';
+  const lang  = userContext?.lang || 'vi';
+  const isVi  = lang !== 'en';
 
   const contextBlock = userContext ? `
 USER CONTEXT
@@ -55,16 +55,16 @@ Response guidelines:
 ${contextBlock}${distressNote}`;
 }
 
+// POST /api/chat
 export const chatWithAI = async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId!;
+    const userId   = req.userId!;
     const { messages } = req.body;
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Messages are required' });
     }
 
-    // Lấy context từ logs gần nhất
     const recentLogs = await prisma.personalLog.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -73,9 +73,9 @@ export const chatWithAI = async (req: AuthRequest, res: Response) => {
 
     let userContext: any = null;
     if (recentLogs.length > 0) {
-      const scores = recentLogs.map(l => l.moodScore);
-      const avgMood = scores.reduce((a, b) => a + b, 0) / scores.length;
-      const trend = scores.length >= 2
+      const scores   = recentLogs.map(l => l.moodScore);
+      const avgMood  = scores.reduce((a, b) => a + b, 0) / scores.length;
+      const trend    = scores.length >= 2
         ? (scores[0] > scores[scores.length - 1] ? 'improving' : 'declining')
         : 'stable';
       const recentEmotions = recentLogs
@@ -95,15 +95,13 @@ export const chatWithAI = async (req: AuthRequest, res: Response) => {
       };
     }
 
-    const systemPrompt = buildSystemPrompt(userContext);
-
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: buildSystemPrompt(userContext) },
         ...messages,
       ],
-      max_tokens: 500,
+      max_tokens:  500,
       temperature: 0.8,
     });
 
