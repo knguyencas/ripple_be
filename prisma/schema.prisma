@@ -24,6 +24,8 @@ model User {
 
   personalLogs  PersonalLog[]
   anonymousLogs AnonymousLog[]
+  stepCounts    StepCount[]
+  sleepSessions SleepSession[]
 }
 
 model PersonalLog {
@@ -55,6 +57,29 @@ model AnonymousLog {
   hour       Int
   dayOfWeek  Int
   createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model StepCount {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime
+  steps     Int
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+}
+
+model SleepSession {
+  id        String   @id @default(cuid())
+  userId    String
+  bedtime   DateTime
+  wakeTime  DateTime
+  duration  Int
+  createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
 }

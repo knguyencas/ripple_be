@@ -4,6 +4,7 @@ import * as dotenv from 'dotenv';
 import authRoutes from './routes/auth.routes';
 import chatRoutes from './routes/chat.routes';
 import logRoutes from './routes/log.routes';
+import healthRoutes from './routes/health.routes';
 
 
 
@@ -18,6 +19,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/logs', logRoutes);
+app.use('/api/health', healthRoutes);
 
 
 app.get('/', (req, res) => {
