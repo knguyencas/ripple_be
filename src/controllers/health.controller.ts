@@ -99,13 +99,15 @@ export const getSummary = async (req: AuthRequest, res: Response) => {
       const dateStr = date.toISOString().split('T')[0];
 
       const stepRecord = stepRecords.find(
-        s => s.date.toISOString().split('T')[0] === dateStr
+        (s) => s.date.toISOString().split('T')[0] === dateStr
       );
 
       const daySleepSessions  = sleepRecords.filter(
-        s => s.wakeTime.toISOString().split('T')[0] === dateStr
+        (s) => s.wakeTime.toISOString().split('T')[0] === dateStr
       );
-      const totalSleepMinutes = daySleepSessions.reduce((sum, s) => sum + s.duration, 0);
+      const totalSleepMinutes = daySleepSessions.reduce(
+        (sum: number, s: typeof sleepRecords[0]) => sum + s.duration, 0
+      );
 
       return {
         date:          dateStr,
@@ -161,7 +163,7 @@ export const getToday = async (req: AuthRequest, res: Response) => {
       steps: stepRecord?.steps ?? null,
       sleep: {
         sessions:     sleepSessions,
-        totalMinutes: sleepSessions.reduce((sum, s) => sum + s.duration, 0),
+        totalMinutes: sleepSessions.reduce((sum: number, s: typeof sleepSessions[0]) => sum + s.duration, 0),
       },
     });
   } catch (error) {

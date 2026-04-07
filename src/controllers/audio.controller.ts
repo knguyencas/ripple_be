@@ -12,7 +12,7 @@ interface AuthRequest extends Request {
 export const uploadAudioToLog = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
-    const logId  = req.params['id'];
+    const logId  = req.params['id'] as string;
 
     const log = await prisma.personalLog.findFirst({
       where: { id: logId, userId },
@@ -51,8 +51,8 @@ export const uploadAudioToLog = async (req: AuthRequest, res: Response) => {
 export const deleteAudio = async (req: AuthRequest, res: Response) => {
   try {
     const userId  = req.userId!;
-    const logId   = req.params['id'];
-    const audioId = req.params['audioId'];
+    const logId   = req.params['id']     as string;
+    const audioId = req.params['audioId'] as string;
 
     const record = await prisma.audioRecording.findFirst({
       where: { id: audioId, logId, userId },
