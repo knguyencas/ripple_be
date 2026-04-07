@@ -8,7 +8,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET!,
 });
 
-const storage = new CloudinaryStorage({
+const audioStorage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder:          'ripple/audio',
@@ -17,9 +17,24 @@ const storage = new CloudinaryStorage({
   } as any,
 });
 
+const photoStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder:          'ripple/photos',
+    resource_type:   'image',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'],
+    transformation:  [{ quality: 'auto', fetch_format: 'auto' }],
+  } as any,
+});
+
 export const uploadAudio = multer({
-  storage,
+  storage: audioStorage,
   limits: { fileSize: 20 * 1024 * 1024 },
 }).single('audio');
+
+export const uploadPhoto = multer({
+  storage: photoStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+}).single('photo');
 
 export { cloudinary };

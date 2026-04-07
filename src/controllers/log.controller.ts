@@ -168,6 +168,10 @@ export const getLog = async (req: AuthRequest, res: Response) => {
           orderBy: { createdAt: 'asc' },
           select: { id: true, url: true, label: true, createdAt: true },
         },
+        photoAttachments: {
+          orderBy: { order: 'asc' },
+          select: { id: true, url: true, order: true },
+        },
       },
     });
     if (!log) return res.status(404).json({ error: 'Log not found' });

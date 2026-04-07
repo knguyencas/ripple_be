@@ -27,6 +27,7 @@ model User {
   stepCounts      StepCount[]
   sleepSessions   SleepSession[]
   audioRecordings AudioRecording[]
+  photoAttachments PhotoAttachment[]
 }
 
 model PersonalLog {
@@ -41,8 +42,9 @@ model PersonalLog {
   alertLevel String?
   createdAt  DateTime @default(now())
 
-  user            User             @relation(fields: [userId], references: [id])
-  audioRecordings AudioRecording[]
+  user             User              @relation(fields: [userId], references: [id])
+  audioRecordings  AudioRecording[]
+  photoAttachments PhotoAttachment[]
 }
 
 model AudioRecording {
@@ -52,6 +54,19 @@ model AudioRecording {
   url       String
   publicId  String
   label     String
+  createdAt DateTime @default(now())
+
+  log  PersonalLog @relation(fields: [logId], references: [id], onDelete: Cascade)
+  user User        @relation(fields: [userId], references: [id])
+}
+
+model PhotoAttachment {
+  id        String   @id @default(cuid())
+  logId     String
+  userId    String
+  url       String
+  publicId  String
+  order     Int      @default(0)
   createdAt DateTime @default(now())
 
   log  PersonalLog @relation(fields: [logId], references: [id], onDelete: Cascade)

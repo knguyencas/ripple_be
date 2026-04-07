@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { createLog, getLogs, getStats, getRecentLogs, getLog, updateLog, getTodayLog } from '../controllers/log.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import audioRoutes from './audio.routes';
+import photoRoutes from './photo.routes';
 
 const router = Router();
 
@@ -15,5 +16,6 @@ router.post('/',       createLog);
 router.get('/:id',     getLog);
 router.put('/:id',     updateLog);
 router.use('/:id/audio', audioRoutes);
+router.use('/:id/photo', photoRoutes);
 
 export default router;
