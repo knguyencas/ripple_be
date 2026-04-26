@@ -1,254 +1,76 @@
-import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
-import { analyzeText, mapAlertLevel } from '../services/nlp.service';
+import { Response } from 'express';
+import { AuthRequest } from '../middlewares/auth.middleware';
+import * as logService from '../services/log.service';
+import { sendControllerError } from '../utils/controller.utils';
 
-const prisma = new PrismaClient();
-
-interface AuthRequest extends Request {
-  userId?: string;
-}
-
-// POST /api/logs
 export const createLog = async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId!;
-    const { mood, moodScore, factors, note } = req.body;
-
-    if (!mood || moodScore === undefined) {
-      return res.status(400).json({ error: 'mood and moodScore are required' });
-    }
-
-    const log = await prisma.personalLog.create({
-      data: {
-        userId,
-        mood,
-        moodScore,
-        factors: factors || [],
-        note: note || null,
-      },
-    });
-
-    await updateStreak(userId);
-
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (user) {
-      const now = new Date();
-      await prisma.anonymousLog.create({
-        data: {
-          userId,
-          mood,
-          moodScore,
-          factors: factors || [],
-          ageGroup: user.ageGroup || null,
-          city: user.city || null,
-          hour: now.getHours(),
-          dayOfWeek: now.getDay(),
-        },
-      });
-    }
-
-    if (note && note.trim().length >= 5) {
-      analyzeText(note, userId).then(async (nlp) => {
-        if (!nlp) return;
-        await prisma.personalLog.update({
-          where: { id: log.id },
-          data: {
-            nlpScore:   nlp.phq_score,
-            nlpEmotion: nlp.severity,
-            alertLevel: mapAlertLevel(nlp),
-          },
-        });
-
-        if (nlp.risk_flag) {
-          console.warn(`[RISK] userId=${userId} | severity=${nlp.severity} | c9=${nlp.c9_ideation}`);
-        }
-      });
-    }
-
+    const log = await logService.createLog(req.userId!, req.body);
     return res.status(201).json(log);
   } catch (error) {
-    console.error('createLog error:', error);
-    return res.status(500).json({ error: 'Failed to create log' });
+    return sendControllerError(res, error, 'createLog', 'Failed to create log');
   }
 };
 
-// GET /api/logs
 export const getLogs = async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId!;
-    const { limit = '20', offset = '0' } = req.query;
-
-    const logs = await prisma.personalLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: parseInt(limit as string),
-      skip: parseInt(offset as string),
-    });
-
+    const logs = await logService.getLogs(req.userId!, req.query.limit, req.query.offset);
     return res.json(logs);
   } catch (error) {
-    console.error('getLogs error:', error);
-    return res.status(500).json({ error: 'Failed to get logs' });
+    return sendControllerError(res, error, 'getLogs', 'Failed to get logs');
   }
 };
 
-// GET /api/logs/stats
 export const getStats = async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId!;
-
-    const logs = await prisma.personalLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 30,
-    });
-
-    if (logs.length === 0) {
-      return res.json({ totalLogs: 0, avgMood: 0, streak: 0, weeklyData: [] });
-    }
-
-    const avgMood = logs.reduce((sum, l) => sum + l.moodScore, 0) / logs.length;
-
-    const weeklyData = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date();
-      date.setDate(date.getDate() - (6 - i));
-      const dayLogs = logs.filter(l => {
-        const logDate = new Date(l.createdAt);
-        return logDate.toDateString() === date.toDateString();
-      });
-      return {
-        date: date.toISOString().split('T')[0],
-        avgMood: dayLogs.length
-          ? dayLogs.reduce((s, l) => s + l.moodScore, 0) / dayLogs.length
-          : null,
-        count: dayLogs.length,
-      };
-    });
-
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-
-    return res.json({
-      totalLogs: logs.length,
-      avgMood: Math.round(avgMood * 10) / 10,
-      streak: user?.streak || 0,
-      weeklyData,
-    });
+    const stats = await logService.getLogStats(req.userId!);
+    return res.json(stats);
   } catch (error) {
-    console.error('getStats error:', error);
-    return res.status(500).json({ error: 'Failed to get stats' });
+    return sendControllerError(res, error, 'getStats', 'Failed to get stats');
   }
 };
 
-// GET /api/logs/recent
 export const getRecentLogs = async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.userId!;
-
-    const logs = await prisma.personalLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    });
-
+    const logs = await logService.getRecentLogs(req.userId!);
     return res.json(logs);
   } catch (error) {
-    console.error('getRecentLogs error:', error);
-    return res.status(500).json({ error: 'Failed to get recent logs' });
+    return sendControllerError(res, error, 'getRecentLogs', 'Failed to get recent logs');
   }
 };
 
-// GET /api/logs/:id
 export const getLog = async (req: AuthRequest, res: Response) => {
   try {
-    const id = req.params['id'] as string;
-    const log = await prisma.personalLog.findFirst({
-      where: { id, userId: req.userId! },
-      include: {
-        audioRecordings: {
-          orderBy: { createdAt: 'asc' },
-          select: { id: true, url: true, label: true, createdAt: true },
-        },
-        photoAttachments: {
-          orderBy: { order: 'asc' },
-          select: { id: true, url: true, order: true },
-        },
-      },
-    });
-    if (!log) return res.status(404).json({ error: 'Log not found' });
+    const log = await logService.getLogById(req.userId!, req.params['id'] as string);
     return res.json(log);
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to get log' });
+    return sendControllerError(res, error, 'getLog', 'Failed to get log');
   }
 };
 
-// PUT /api/logs/:id
 export const updateLog = async (req: AuthRequest, res: Response) => {
   try {
-    const id = req.params['id'] as string;
-    const { mood, moodScore, factors, note } = req.body;
-
-    const existing = await prisma.personalLog.findFirst({
-      where: { id, userId: req.userId! },
-    });
-    if (!existing) return res.status(404).json({ error: 'Log not found' });
-
-    const updated = await prisma.personalLog.update({
-      where: { id },
-      data: {
-        ...(mood && { mood }),
-        ...(moodScore !== undefined && { moodScore }),
-        ...(factors && { factors }),
-        ...(note !== undefined && { note }),
-      },
-    });
+    const updated = await logService.updateLog(req.userId!, req.params['id'] as string, req.body);
     return res.json(updated);
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to update log' });
+    return sendControllerError(res, error, 'updateLog', 'Failed to update log');
   }
 };
 
-// GET /api/logs/today
 export const getTodayLog = async (req: AuthRequest, res: Response) => {
   try {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-
-    const log = await prisma.personalLog.findFirst({
-      where: {
-        userId: req.userId!,
-        createdAt: { gte: start, lte: end },
-      },
-    });
+    const log = await logService.getTodayLog(req.userId!);
     return res.json({ log });
   } catch (error) {
-    return res.status(500).json({ error: 'Failed to check today log' });
+    return sendControllerError(res, error, 'getTodayLog', 'Failed to check today log');
   }
 };
 
-async function updateStreak(userId: string) {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) return;
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const lastLog = user.lastLogDate ? new Date(user.lastLogDate) : null;
-  if (lastLog) lastLog.setHours(0, 0, 0, 0);
-
-  let newStreak = user.streak;
-
-  if (!lastLog) {
-    newStreak = 1;
-  } else {
-    const diffDays = Math.round((today.getTime() - lastLog.getTime()) / 86400000);
-    if (diffDays === 1) newStreak += 1;
-    else if (diffDays > 1) newStreak = 1;
+export const deleteLog = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await logService.deleteLog(req.userId!, req.params['id'] as string);
+    return res.json(result);
+  } catch (error) {
+    return sendControllerError(res, error, 'deleteLog', 'Failed to delete log');
   }
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: { streak: newStreak, lastLogDate: new Date() },
-  });
-}
+};

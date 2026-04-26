@@ -1,5 +1,8 @@
 import { Router } from 'express';
-import { createLog, getLogs, getStats, getRecentLogs, getLog, updateLog, getTodayLog } from '../controllers/log.controller';
+import {
+  createLog, getLogs, getStats, getRecentLogs,
+  getLog, updateLog, getTodayLog, deleteLog,
+} from '../controllers/log.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import audioRoutes from './audio.routes';
 import photoRoutes from './photo.routes';
@@ -15,6 +18,7 @@ router.get('/',        getLogs);
 router.post('/',       createLog);
 router.get('/:id',     getLog);
 router.put('/:id',     updateLog);
+router.delete('/:id',  deleteLog);
 router.use('/:id/audio', audioRoutes);
 router.use('/:id/photo', photoRoutes);
 
