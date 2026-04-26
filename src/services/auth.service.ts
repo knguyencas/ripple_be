@@ -27,7 +27,7 @@ export const registerUser = async (input: RegisterInput) => {
   });
 
   const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET!, {
-    expiresIn: '7d'
+    expiresIn: '30d'
   });
 
   return {
@@ -51,7 +51,7 @@ export const loginUser = async (input: LoginInput) => {
   if (!valid) throw new Error('Sai mật khẩu');
 
   const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET!, {
-    expiresIn: '7d'
+    expiresIn: '30d'
   });
 
   return {
