@@ -9,25 +9,94 @@ datasource db {
 }
 
 model User {
-  id          String    @id @default(cuid())
-  email       String?   @unique
-  username    String    @unique
-  password    String
-  displayName String?
-  avatar      String?
-  bio         String?
-  ageGroup    String?
-  city        String?
-  streak      Int       @default(0)
-  lastLogDate DateTime?
-  createdAt   DateTime  @default(now())
+  id                    String    @id @default(cuid())
+  email                 String?   @unique
+  username              String    @unique
+  password              String
+  displayName           String?
+  avatar                String?
+  bio                   String?
+  ageGroup              String?
+  city                  String?
+  streak                Int       @default(0)
+  lastLogDate           DateTime?
+  profileClass          String    @default("undetermined")
+  profileClassUpdatedAt DateTime?
+  createdAt             DateTime  @default(now())
 
-  personalLogs    PersonalLog[]
-  anonymousLogs   AnonymousLog[]
-  stepCounts      StepCount[]
-  sleepSessions   SleepSession[]
-  audioRecordings AudioRecording[]
-  photoAttachments PhotoAttachment[]
+  personalLogs       PersonalLog[]
+  anonymousLogs      AnonymousLog[]
+  stepCounts         StepCount[]
+  sleepSessions      SleepSession[]
+  audioRecordings    AudioRecording[]
+  photoAttachments   PhotoAttachment[]
+  waterIntakes       WaterIntake[]
+  chatInsights       ChatInsight[]
+  feedbacks          Feedback[]
+  meditationSessions MeditationSession[]
+}
+
+model MeditationSound {
+  id          String   @id
+  name        String
+  description String
+  url         String
+  fileSizeMB  Float
+  durationSec Int
+  order       Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessions MeditationSession[]
+}
+
+model MeditationSession {
+  id          String   @id @default(cuid())
+  userId      String
+  soundId     String
+  targetMin   Int
+  actualMin   Int
+  completed   Boolean  @default(false)
+  startedAt   DateTime
+  completedAt DateTime
+  createdAt   DateTime @default(now())
+
+  user  User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sound MeditationSound @relation(fields: [soundId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([userId, startedAt])
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  userId    String
+  rating    Int
+  message   String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model ChatInsight {
+  id               String   @id @default(cuid())
+  userId           String
+  date             DateTime
+  alertLevel       String   @default("low")
+  alertScore       Float    @default(0)
+  messageCount     Int      @default(0)
+  keywords         String[]
+  notableSentences String[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@index([userId, date])
 }
 
 model PersonalLog {
@@ -97,6 +166,20 @@ model StepCount {
   date      DateTime
   steps     Int
   createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+}
+
+model WaterIntake {
+  id        String   @id @default(cuid())
+  userId    String
+  date      DateTime
+  glasses   Int      @default(0)
+  goal      Int      @default(8)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id])
 
