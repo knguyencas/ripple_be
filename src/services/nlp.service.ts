@@ -20,8 +20,9 @@ export async function analyzeText(text: string, userId: string): Promise<NLPResu
       { timeout: 15000 }
     );
     return data;
-  } catch (err: any) {
-    console.error('NLP service error:', err.message);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown NLP service error';
+    console.error('NLP service error:', message);
     return null;
   }
 }
