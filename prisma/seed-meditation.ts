@@ -72,7 +72,7 @@ const SOUNDS: SoundSeed[] = [
 async function main() {
   for (const sound of SOUNDS) {
     if (sound.url === 'PASTE_URL_HERE') {
-      console.warn(`Skip "${sound.id}" — URL chưa được cập nhật.`);
+      console.warn(`Skip "${sound.id}" URL chưa được cập nhật.`);
       continue;
     }
     await prisma.meditationSound.upsert({
@@ -88,7 +88,7 @@ async function main() {
         active: true,
       },
     });
-    console.log(`✓ Seeded "${sound.id}"`);
+    console.log(`Seeded "${sound.id}"`);
   }
 }
 
