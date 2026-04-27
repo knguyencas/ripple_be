@@ -1,7 +1,7 @@
 import prisma from '../models/prisma';
 import { cloudinary } from '../middlewares/upload.middleware';
 import { analyzeText, mapAlertLevel } from './nlp.service';
-import { touchLogStreak } from './streak.service';
+import { getUserStreak, touchLogStreak } from './streak.service';
 import { HttpError } from '../utils/http-error';
 
 interface CreateLogInput {
@@ -103,18 +103,18 @@ export async function getLogs(userId: string, limit: unknown, offset: unknown) {
 }
 
 export async function getLogStats(userId: string) {
-  const [logs, totalLogs, user] = await Promise.all([
+  const [logs, totalLogs, streak] = await Promise.all([
     prisma.personalLog.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
       take: 30,
     }),
     prisma.personalLog.count({ where: { userId } }),
-    prisma.user.findUnique({ where: { id: userId } }),
+    getUserStreak(userId),
   ]);
 
   if (logs.length === 0) {
-    return { totalLogs: 0, avgMood: 0, streak: user?.streak || 0, weeklyData: [] };
+    return { totalLogs: 0, avgMood: 0, streak: streak.currentStreak, weeklyData: [] };
   }
 
   const avgMood = logs.reduce((sum, log) => sum + log.moodScore, 0) / logs.length;
@@ -138,7 +138,7 @@ export async function getLogStats(userId: string) {
   return {
     totalLogs,
     avgMood: Math.round(avgMood * 10) / 10,
-    streak: user?.streak || 0,
+    streak: streak.currentStreak,
     weeklyData,
   };
 }
@@ -219,5 +219,6 @@ export async function deleteLog(userId: string, id: string) {
   ]);
 
   await prisma.personalLog.delete({ where: { id } });
+  await touchLogStreak(userId);
   return { success: true };
 }

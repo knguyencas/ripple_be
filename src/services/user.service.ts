@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import prisma from '../models/prisma';
 import { HttpError } from '../utils/http-error';
+import { getUserStreak } from './streak.service';
 
 interface UpdateUserInput {
   displayName?: string | null;
@@ -116,11 +117,8 @@ export async function getUserStats(userId: string) {
   const thirtyDaysAgo = new Date(now);
   thirtyDaysAgo.setUTCDate(thirtyDaysAgo.getUTCDate() - 30);
 
-  const [user, totalLogs, recentLogs] = await Promise.all([
-    prisma.user.findUnique({
-      where: { id: userId },
-      select: { streak: true },
-    }),
+  const [streak, totalLogs, recentLogs] = await Promise.all([
+    getUserStreak(userId),
     prisma.personalLog.count({ where: { userId } }),
     prisma.personalLog.findMany({
       where: { userId, createdAt: { gte: thirtyDaysAgo } },
@@ -128,14 +126,12 @@ export async function getUserStats(userId: string) {
     }),
   ]);
 
-  if (!user) throw new HttpError(404, 'User not found');
-
   const avgMood = recentLogs.length > 0
     ? Math.round((recentLogs.reduce((sum, log) => sum + log.moodScore, 0) / recentLogs.length) * 10) / 10
     : null;
 
   return {
-    streak: user.streak,
+    streak: streak.currentStreak,
     totalLogs,
     avgMood,
     avgMoodWindowDays: 30,

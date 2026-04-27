@@ -1,31 +1,122 @@
 import prisma from '../models/prisma';
-import { daysBetweenDateKeys, isLocalDate } from '../utils/date.utils';
+import { isLocalDate } from '../utils/date.utils';
 import { HttpError } from '../utils/http-error';
+import { createNotification } from './notification.service';
 
-export async function touchLogStreak(userId: string): Promise<void> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) return;
+const STREAK_MILESTONES = new Set([3, 7, 14, 30, 60, 100]);
+const STREAK_MAX_GAP_MS = 24 * 60 * 60 * 1000;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+interface StreakSnapshot {
+  currentStreak: number;
+  lastLogDate: Date | null;
+}
 
-  const lastLog = user.lastLogDate ? new Date(user.lastLogDate) : null;
-  if (lastLog) lastLog.setHours(0, 0, 0, 0);
+function sameStoredDate(a: Date | null, b: Date | null): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return a.getTime() === b.getTime();
+}
 
-  let newStreak = user.streak;
-
-  if (!lastLog) {
-    newStreak = 1;
-  } else {
-    const diffDays = Math.round((today.getTime() - lastLog.getTime()) / 86400000);
-    if (diffDays === 1) newStreak += 1;
-    else if (diffDays > 1) newStreak = 1;
+function calculateStreakFromDates(datesDesc: Date[], referenceDate: Date): StreakSnapshot {
+  if (datesDesc.length === 0) {
+    return { currentStreak: 0, lastLogDate: null };
   }
 
-  await prisma.user.update({
-    where: { id: userId },
-    data: { streak: newStreak, lastLogDate: new Date() },
+  const latest = datesDesc[0];
+  if (referenceDate.getTime() - latest.getTime() > STREAK_MAX_GAP_MS) {
+    return { currentStreak: 0, lastLogDate: latest };
+  }
+
+  let currentStreak = 1;
+  let previous = latest;
+
+  for (const current of datesDesc.slice(1)) {
+    const gap = previous.getTime() - current.getTime();
+    if (gap > STREAK_MAX_GAP_MS) break;
+    currentStreak += 1;
+    previous = current;
+  }
+
+  return { currentStreak, lastLogDate: latest };
+}
+
+export async function calculateCurrentStreak(
+  userId: string,
+  referenceDate = new Date()
+): Promise<StreakSnapshot> {
+  const logs = await prisma.personalLog.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+    select: { createdAt: true },
   });
+
+  return calculateStreakFromDates(
+    logs.map((log) => log.createdAt),
+    referenceDate
+  );
+}
+
+async function maybeCreateMilestoneNotification(
+  userId: string,
+  previousStreak: number,
+  currentStreak: number
+) {
+  if (currentStreak === previousStreak || !STREAK_MILESTONES.has(currentStreak)) return;
+
+  const title = `Chuỗi ${currentStreak} ngày`;
+  const existing = await prisma.notification.findFirst({
+    where: {
+      userId,
+      type: 'streak_milestone',
+      title,
+    },
+    select: { id: true },
+  });
+
+  if (existing) return;
+
+  await createNotification(userId, {
+    type: 'streak_milestone',
+    title,
+    body: `Bạn đã ghi journal ${currentStreak} ngày liên tục. Giữ nhịp nhẹ nhàng này nhé.`,
+    data: { streak: currentStreak },
+  });
+}
+
+async function syncUserStreak(
+  userId: string,
+  options: { notifyMilestone?: boolean } = {}
+) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { streak: true, lastLogDate: true },
+  });
+  if (!user) throw new HttpError(404, 'User not found');
+
+  const snapshot = await calculateCurrentStreak(userId);
+
+  if (
+    user.streak !== snapshot.currentStreak ||
+    !sameStoredDate(user.lastLogDate, snapshot.lastLogDate)
+  ) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        streak: snapshot.currentStreak,
+        lastLogDate: snapshot.lastLogDate,
+      },
+    });
+  }
+
+  if (options.notifyMilestone) {
+    await maybeCreateMilestoneNotification(userId, user.streak, snapshot.currentStreak);
+  }
+
+  return snapshot;
+}
+
+export async function touchLogStreak(userId: string): Promise<void> {
+  await syncUserStreak(userId, { notifyMilestone: true });
 }
 
 export async function pingUserStreak(userId: string, localDate: unknown) {
@@ -33,52 +124,19 @@ export async function pingUserStreak(userId: string, localDate: unknown) {
     throw new HttpError(400, 'localDate (YYYY-MM-DD) is required');
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw new HttpError(404, 'User not found');
+  const snapshot = await syncUserStreak(userId);
 
-  const lastStr = user.lastLogDate
-    ? user.lastLogDate.toISOString().slice(0, 10)
-    : null;
-
-  let streak = user.streak;
-  let shouldWrite = false;
-
-  if (!lastStr) {
-    streak = 1;
-    shouldWrite = true;
-  } else if (lastStr !== localDate) {
-    const gap = daysBetweenDateKeys(lastStr, localDate);
-    if (gap === 1) {
-      streak += 1;
-      shouldWrite = true;
-    } else if (gap > 1) {
-      streak = 1;
-      shouldWrite = true;
-    }
-  }
-
-  if (shouldWrite) {
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        streak,
-        lastLogDate: new Date(`${localDate}T00:00:00.000Z`),
-      },
-    });
-  }
-
-  return { currentStreak: streak, lastStreakDate: localDate };
+  return {
+    currentStreak: snapshot.currentStreak,
+    lastStreakDate: snapshot.lastLogDate ? snapshot.lastLogDate.toISOString().slice(0, 10) : null,
+  };
 }
 
 export async function getUserStreak(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { streak: true, lastLogDate: true },
-  });
-  if (!user) throw new HttpError(404, 'User not found');
+  const snapshot = await syncUserStreak(userId);
 
   return {
-    currentStreak: user.streak,
-    lastStreakDate: user.lastLogDate ? user.lastLogDate.toISOString().slice(0, 10) : null,
+    currentStreak: snapshot.currentStreak,
+    lastStreakDate: snapshot.lastLogDate ? snapshot.lastLogDate.toISOString().slice(0, 10) : null,
   };
 }
