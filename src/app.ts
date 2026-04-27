@@ -9,6 +9,7 @@ import waterRoutes from './routes/water.routes';
 import feedbackRoutes from './routes/feedback.routes';
 import encouragementRoutes from './routes/encouragement.routes';
 import meditationRoutes from './routes/meditation.routes';
+import notificationRoutes from './routes/notification.routes';
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use('/api/water', waterRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/encouragement', encouragementRoutes);
 app.use('/api/meditation', meditationRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 app.get('/', (_req, res) => {
   res.json({ message: 'Ripple API is running' });

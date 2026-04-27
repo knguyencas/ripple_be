@@ -34,6 +34,7 @@ model User {
   chatInsights       ChatInsight[]
   feedbacks          Feedback[]
   meditationSessions MeditationSession[]
+  notifications      Notification[]
 }
 
 model MeditationSound {
@@ -79,6 +80,22 @@ model Feedback {
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
 }
 
 model ChatInsight {
