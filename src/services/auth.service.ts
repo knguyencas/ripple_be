@@ -3,28 +3,85 @@ import jwt from 'jsonwebtoken';
 import prisma from '../models/prisma';
 import { RegisterInput, LoginInput } from '../types';
 
-export const registerUser = async (input: RegisterInput) => {
-  const { email, username, password, ageGroup } = input;
+function authUserPayload(user: {
+  id: string;
+  email: string | null;
+  username: string;
+  displayName: string | null;
+  avatar?: string | null;
+  ageGroup?: string | null;
+  mediaKeySalt?: string | null;
+  encryptedMediaKey?: string | null;
+  mediaKeyIv?: string | null;
+  mediaKeyVersion?: number | null;
+}) {
+  return {
+    id: user.id,
+    email: user.email,
+    username: user.username,
+    displayName: user.displayName,
+    avatar: user.avatar ?? null,
+    ageGroup: user.ageGroup ?? null,
+    mediaKeySalt: user.mediaKeySalt ?? null,
+    encryptedMediaKey: user.encryptedMediaKey ?? null,
+    mediaKeyIv: user.mediaKeyIv ?? null,
+    mediaKeyVersion: user.mediaKeyVersion ?? 1,
+  };
+}
 
-  const existing = await prisma.user.findFirst({
-    where: {
-      OR: [
-        { username },
-        ...(email ? [{ email }] : [])
-      ]
-    }
+export const registerUser = async (input: RegisterInput) => {
+  const {
+    email,
+    username,
+    password,
+    ageGroup,
+    mediaKeySalt,
+    encryptedMediaKey,
+    mediaKeyIv,
+    mediaKeyVersion,
+  } = input;
+
+  const existingUsername = await prisma.user.findUnique({
+    where: { username },
   });
-  if (existing) throw new Error('Username hoặc email đã tồn tại');
+  if (existingUsername) {
+    throw new Error('Tên đăng nhập đã tồn tại. Vui lòng chọn tên khác.');
+  }
+
+  if (email) {
+    const existingEmail = await prisma.user.findUnique({
+      where: { email },
+    });
+    if (existingEmail) {
+      throw new Error('Email đã được sử dụng. Vui lòng nhập email khác.');
+    }
+  }
 
   const hashed = await bcrypt.hash(password, 10);
-  const user = await prisma.user.create({
-    data: {
-      username,
-      password: hashed,
-      ageGroup,
-      ...(email ? { email } : {})
+  let user;
+  try {
+    user = await prisma.user.create({
+      data: {
+        username,
+        password: hashed,
+        ageGroup,
+        mediaKeySalt: mediaKeySalt || null,
+        encryptedMediaKey: encryptedMediaKey || null,
+        mediaKeyIv: mediaKeyIv || null,
+        mediaKeyVersion: mediaKeyVersion || 1,
+        ...(email ? { email } : {})
+      }
+    });
+  } catch (error: any) {
+    if (error?.code === 'P2002') {
+      const target = Array.isArray(error?.meta?.target) ? error.meta.target.join(',') : String(error?.meta?.target ?? '');
+      if (target.includes('email')) {
+        throw new Error('Email đã được sử dụng. Vui lòng nhập email khác.');
+      }
+      throw new Error('Tên đăng nhập đã tồn tại. Vui lòng chọn tên khác.');
     }
-  });
+    throw error;
+  }
 
   const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET!, {
     expiresIn: '30d'
@@ -32,12 +89,7 @@ export const registerUser = async (input: RegisterInput) => {
 
   return {
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      displayName: user.displayName
-    }
+    user: authUserPayload(user)
   };
 };
 
@@ -56,11 +108,6 @@ export const loginUser = async (input: LoginInput) => {
 
   return {
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      username: user.username,
-      displayName: user.displayName
-    }
+    user: authUserPayload(user)
   };
 };
