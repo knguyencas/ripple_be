@@ -3,6 +3,10 @@ export interface RegisterInput {
   username: string;
   password: string;
   ageGroup?: string;
+  mediaKeySalt?: string;
+  encryptedMediaKey?: string;
+  mediaKeyIv?: string;
+  mediaKeyVersion?: number;
 }
 
 export interface LoginInput {
