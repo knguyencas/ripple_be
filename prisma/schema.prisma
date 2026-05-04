@@ -22,6 +22,10 @@ model User {
   lastLogDate           DateTime?
   profileClass          String    @default("undetermined")
   profileClassUpdatedAt DateTime?
+  mediaKeySalt          String?
+  encryptedMediaKey     String?
+  mediaKeyIv            String?
+  mediaKeyVersion       Int       @default(1)
   createdAt             DateTime  @default(now())
 
   personalLogs       PersonalLog[]
@@ -140,6 +144,10 @@ model AudioRecording {
   url       String
   publicId  String
   label     String
+  encrypted Boolean  @default(false)
+  iv        String?
+  mimeType  String?
+  resourceType String @default("video")
   createdAt DateTime @default(now())
 
   log  PersonalLog @relation(fields: [logId], references: [id], onDelete: Cascade)
@@ -153,6 +161,10 @@ model PhotoAttachment {
   url       String
   publicId  String
   order     Int      @default(0)
+  encrypted Boolean  @default(false)
+  iv        String?
+  mimeType  String?
+  resourceType String @default("image")
   createdAt DateTime @default(now())
 
   log  PersonalLog @relation(fields: [logId], references: [id], onDelete: Cascade)
