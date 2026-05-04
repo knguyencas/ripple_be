@@ -14,7 +14,35 @@ interface UpdateUserInput {
 interface ChangePasswordInput {
   currentPassword?: string;
   newPassword?: string;
+  mediaKeySalt?: string;
+  encryptedMediaKey?: string;
+  mediaKeyIv?: string;
+  mediaKeyVersion?: number;
 }
+
+interface MediaKeyInput {
+  mediaKeySalt?: string;
+  encryptedMediaKey?: string;
+  mediaKeyIv?: string;
+  mediaKeyVersion?: number;
+}
+
+const USER_PROFILE_SELECT = {
+  id: true,
+  email: true,
+  username: true,
+  displayName: true,
+  avatar: true,
+  bio: true,
+  ageGroup: true,
+  city: true,
+  streak: true,
+  createdAt: true,
+  mediaKeySalt: true,
+  encryptedMediaKey: true,
+  mediaKeyIv: true,
+  mediaKeyVersion: true,
+} as const;
 
 export async function getUserProfile(userId: string) {
   const user = await prisma.user.findUnique({
@@ -31,6 +59,10 @@ export async function getUserProfile(userId: string) {
       streak: true,
       createdAt: true,
       profileClass: true,
+      mediaKeySalt: true,
+      encryptedMediaKey: true,
+      mediaKeyIv: true,
+      mediaKeyVersion: true,
     },
   });
   if (!user) throw new HttpError(404, 'User not found');
@@ -69,6 +101,41 @@ export async function updateUserProfile(userId: string, input: UpdateUserInput) 
   return prisma.user.update({
     where: { id: userId },
     data,
+    select: USER_PROFILE_SELECT,
+  });
+}
+
+export async function updateUserAvatar(userId: string, avatar: string) {
+  if (typeof avatar !== 'string' || !avatar.trim()) {
+    throw new HttpError(400, 'Avatar file is required');
+  }
+
+  return prisma.user.update({
+    where: { id: userId },
+    data: { avatar },
+    select: USER_PROFILE_SELECT,
+  });
+}
+
+export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
+  const { mediaKeySalt, encryptedMediaKey, mediaKeyIv, mediaKeyVersion } = input;
+
+  if (
+    typeof mediaKeySalt !== 'string' ||
+    typeof encryptedMediaKey !== 'string' ||
+    typeof mediaKeyIv !== 'string'
+  ) {
+    throw new HttpError(400, 'Invalid media key payload');
+  }
+
+  return prisma.user.update({
+    where: { id: userId },
+    data: {
+      mediaKeySalt,
+      encryptedMediaKey,
+      mediaKeyIv,
+      mediaKeyVersion: mediaKeyVersion || 1,
+    },
     select: {
       id: true,
       email: true,
@@ -80,12 +147,23 @@ export async function updateUserProfile(userId: string, input: UpdateUserInput) 
       city: true,
       streak: true,
       createdAt: true,
+      mediaKeySalt: true,
+      encryptedMediaKey: true,
+      mediaKeyIv: true,
+      mediaKeyVersion: true,
     },
   });
 }
 
 export async function changeUserPassword(userId: string, input: ChangePasswordInput) {
-  const { currentPassword, newPassword } = input;
+  const {
+    currentPassword,
+    newPassword,
+    mediaKeySalt,
+    encryptedMediaKey,
+    mediaKeyIv,
+    mediaKeyVersion,
+  } = input;
 
   if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
     throw new HttpError(400, 'currentPassword và newPassword là bắt buộc');
@@ -103,13 +181,41 @@ export async function changeUserPassword(userId: string, input: ChangePasswordIn
   const valid = await bcrypt.compare(currentPassword, user.password);
   if (!valid) throw new HttpError(401, 'Mật khẩu hiện tại không đúng');
 
-  const hashed = await bcrypt.hash(newPassword, 10);
-  await prisma.user.update({
+  const hadEnvelope = Boolean(user.encryptedMediaKey && user.mediaKeySalt && user.mediaKeyIv);
+
+  const data: Record<string, unknown> = {
+    password: await bcrypt.hash(newPassword, 10),
+  };
+
+  if (hadEnvelope) {
+    if (
+      typeof mediaKeySalt !== 'string' ||
+      typeof encryptedMediaKey !== 'string' ||
+      typeof mediaKeyIv !== 'string'
+    ) {
+      throw new HttpError(
+        400,
+        'Thiếu media key envelope mới — đổi mật khẩu mà không re-wrap sẽ làm mất media đã mã hoá'
+      );
+    }
+    data['mediaKeySalt'] = mediaKeySalt;
+    data['encryptedMediaKey'] = encryptedMediaKey;
+    data['mediaKeyIv'] = mediaKeyIv;
+    data['mediaKeyVersion'] = mediaKeyVersion || 1;
+  }
+
+  const updated = await prisma.user.update({
     where: { id: userId },
-    data: { password: hashed },
+    data,
+    select: {
+      mediaKeySalt: true,
+      encryptedMediaKey: true,
+      mediaKeyIv: true,
+      mediaKeyVersion: true,
+    },
   });
 
-  return { ok: true };
+  return { ok: true, ...updated };
 }
 
 export async function getUserStats(userId: string) {
