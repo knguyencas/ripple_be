@@ -3,14 +3,15 @@ import { AuthRequest } from '../middlewares/auth.middleware';
 import * as mediaService from '../services/media.service';
 import { sendControllerError } from '../utils/controller.utils';
 
-type UploadedFile = { path: string; filename: string };
+type UploadedFile = { path: string; filename: string; mimetype?: string };
 
 export const uploadPhoto = async (req: AuthRequest, res: Response) => {
   try {
     const record = await mediaService.uploadPhoto(
       req.userId!,
       req.params['id'] as string,
-      req.file as UploadedFile | undefined
+      req.file as UploadedFile | undefined,
+      req.body ?? {}
     );
     return res.status(201).json(record);
   } catch (error) {
