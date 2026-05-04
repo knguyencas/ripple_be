@@ -7,10 +7,24 @@ const router = Router({ mergeParams: true });
 
 router.use(authMiddleware);
 
-// POST /api/logs/:id/audio
 router.post('/', (req, res, next) => {
-  uploadAudio(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message ?? 'Upload failed' });
+  uploadAudio(req, res, (err: any) => {
+    if (err) {
+      console.error('[audio upload] multer/cloudinary error:', {
+        code: err.code,
+        message: err.message,
+        field: err.field,
+        name: err.name,
+        http_code: err.http_code,
+      });
+      return res.status(400).json({
+        error: err.message ?? 'Upload failed',
+        code: err.code,
+      });
+    }
+    if (!req.file) {
+      console.warn('[audio upload] no file on request after multer');
+    }
     next();
   });
 }, uploadAudioToLog);

@@ -7,10 +7,24 @@ const router = Router({ mergeParams: true });
 
 router.use(authMiddleware);
 
-// POST /api/logs/:id/photo
 router.post('/', (req, res, next) => {
-  uploadPhoto(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message ?? 'Upload failed' });
+  uploadPhoto(req, res, (err: any) => {
+    if (err) {
+      console.error('[photo upload] multer/cloudinary error:', {
+        code: err.code,
+        message: err.message,
+        field: err.field,
+        name: err.name,
+        http_code: err.http_code,
+      });
+      return res.status(400).json({
+        error: err.message ?? 'Upload failed',
+        code: err.code,
+      });
+    }
+    if (!req.file) {
+      console.warn('[photo upload] no file on request after multer');
+    }
     next();
   });
 }, uploadPhotoHandler);
