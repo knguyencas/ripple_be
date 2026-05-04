@@ -18,6 +18,19 @@ interface UpdateLogInput {
   note?: string | null;
 }
 
+type CloudinaryResourceType = 'image' | 'video' | 'raw';
+
+function getCloudinaryResourceType(
+  resourceType: string | null | undefined,
+  encrypted: boolean,
+  fallback: Exclude<CloudinaryResourceType, 'raw'>
+): CloudinaryResourceType {
+  if (resourceType === 'image' || resourceType === 'video' || resourceType === 'raw') {
+    return resourceType;
+  }
+  return encrypted ? 'raw' : fallback;
+}
+
 function parsePagination(limit: unknown, offset: unknown) {
   const take = Math.min(Math.max(parseInt(String(limit ?? '20'), 10) || 20, 1), 300);
   const skip = Math.max(parseInt(String(offset ?? '0'), 10) || 0, 0);
@@ -157,11 +170,26 @@ export async function getLogById(userId: string, id: string) {
     include: {
       audioRecordings: {
         orderBy: { createdAt: 'asc' },
-        select: { id: true, url: true, label: true, createdAt: true },
+        select: {
+          id: true,
+          url: true,
+          label: true,
+          encrypted: true,
+          iv: true,
+          mimeType: true,
+          createdAt: true,
+        },
       },
       photoAttachments: {
         orderBy: { order: 'asc' },
-        select: { id: true, url: true, order: true },
+        select: {
+          id: true,
+          url: true,
+          order: true,
+          encrypted: true,
+          iv: true,
+          mimeType: true,
+        },
       },
     },
   });
@@ -211,10 +239,14 @@ export async function deleteLog(userId: string, id: string) {
 
   await Promise.allSettled([
     ...log.photoAttachments.map((photo) =>
-      cloudinary.uploader.destroy(photo.publicId, { resource_type: 'image' })
+      cloudinary.uploader.destroy(photo.publicId, {
+        resource_type: getCloudinaryResourceType(photo.resourceType, photo.encrypted, 'image'),
+      })
     ),
     ...log.audioRecordings.map((audio) =>
-      cloudinary.uploader.destroy(audio.publicId, { resource_type: 'video' })
+      cloudinary.uploader.destroy(audio.publicId, {
+        resource_type: getCloudinaryResourceType(audio.resourceType, audio.encrypted, 'video'),
+      })
     ),
   ]);
 
