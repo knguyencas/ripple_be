@@ -22,7 +22,7 @@ export async function saveSteps(userId: string, input: { date?: unknown; steps?:
 
 export async function saveSleep(
   userId: string,
-  input: { bedtime?: unknown; wakeTime?: unknown; duration?: unknown }
+  input: { bedtime?: unknown; wakeTime?: unknown; duration?: unknown; source?: unknown }
 ) {
   const { bedtime, wakeTime, duration } = input;
 
@@ -33,18 +33,36 @@ export async function saveSleep(
     throw new HttpError(400, 'duration must be a non-negative number (minutes)');
   }
 
-  return prisma.sleepSession.create({
-    data: {
-      userId,
-      bedtime: new Date(String(bedtime)),
-      wakeTime: new Date(String(wakeTime)),
-      duration,
-    },
+  const bedtimeDate = new Date(String(bedtime));
+  const wakeTimeDate = new Date(String(wakeTime));
+  if (Number.isNaN(bedtimeDate.getTime()) || Number.isNaN(wakeTimeDate.getTime())) {
+    throw new HttpError(400, 'bedtime and wakeTime must be valid dates');
+  }
+
+  const sleepDate = toDateOnlyUTC(wakeTimeDate);
+  const nextDate = new Date(sleepDate.getTime() + 86400000);
+
+  return prisma.$transaction(async (tx) => {
+    await tx.sleepSession.deleteMany({
+      where: {
+        userId,
+        wakeTime: { gte: sleepDate, lt: nextDate },
+      },
+    });
+
+    return tx.sleepSession.create({
+      data: {
+        userId,
+        bedtime: bedtimeDate,
+        wakeTime: wakeTimeDate,
+        duration,
+      },
+    });
   });
 }
 
 export async function getHealthSummary(userId: string, daysValue: unknown) {
-  const days = Math.min(Math.max(parseInt(String(daysValue || '7'), 10), 1), 90);
+  const days = Math.min(Math.max(parseInt(String(daysValue || '7'), 10), 1), 365);
 
   const today = toDateOnlyUTC(new Date());
   const from = new Date(today);
