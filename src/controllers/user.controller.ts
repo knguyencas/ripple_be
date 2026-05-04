@@ -4,6 +4,8 @@ import * as userService from '../services/user.service';
 import * as streakService from '../services/streak.service';
 import { sendControllerError } from '../utils/controller.utils';
 
+type UploadedFile = { path: string; filename: string };
+
 export const pingStreak = async (req: AuthRequest, res: Response) => {
   try {
     const result = await streakService.pingUserStreak(req.userId!, req.body?.localDate);
@@ -28,6 +30,25 @@ export const updateMe = async (req: AuthRequest, res: Response) => {
     return res.json(user);
   } catch (error) {
     return sendControllerError(res, error, 'updateMe', 'Failed to update user');
+  }
+};
+
+export const updateAvatar = async (req: AuthRequest, res: Response) => {
+  try {
+    const file = req.file as UploadedFile | undefined;
+    const user = await userService.updateUserAvatar(req.userId!, file?.path ?? '');
+    return res.json(user);
+  } catch (error) {
+    return sendControllerError(res, error, 'updateAvatar', 'Failed to update avatar');
+  }
+};
+
+export const updateMediaKey = async (req: AuthRequest, res: Response) => {
+  try {
+    const user = await userService.updateUserMediaKey(req.userId!, req.body ?? {});
+    return res.json(user);
+  } catch (error) {
+    return sendControllerError(res, error, 'updateMediaKey', 'Failed to update media key');
   }
 };
 
