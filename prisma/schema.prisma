@@ -26,6 +26,8 @@ model User {
   encryptedMediaKey     String?
   mediaKeyIv            String?
   mediaKeyVersion       Int       @default(1)
+  passwordResetToken    String?   @unique
+  passwordResetExpires  DateTime?
   createdAt             DateTime  @default(now())
 
   personalLogs       PersonalLog[]

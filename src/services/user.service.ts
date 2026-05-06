@@ -14,10 +14,6 @@ interface UpdateUserInput {
 interface ChangePasswordInput {
   currentPassword?: string;
   newPassword?: string;
-  mediaKeySalt?: string;
-  encryptedMediaKey?: string;
-  mediaKeyIv?: string;
-  mediaKeyVersion?: number;
 }
 
 interface MediaKeyInput {
@@ -156,14 +152,7 @@ export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
 }
 
 export async function changeUserPassword(userId: string, input: ChangePasswordInput) {
-  const {
-    currentPassword,
-    newPassword,
-    mediaKeySalt,
-    encryptedMediaKey,
-    mediaKeyIv,
-    mediaKeyVersion,
-  } = input;
+  const { currentPassword, newPassword } = input;
 
   if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
     throw new HttpError(400, 'currentPassword và newPassword là bắt buộc');
@@ -181,41 +170,12 @@ export async function changeUserPassword(userId: string, input: ChangePasswordIn
   const valid = await bcrypt.compare(currentPassword, user.password);
   if (!valid) throw new HttpError(401, 'Mật khẩu hiện tại không đúng');
 
-  const hadEnvelope = Boolean(user.encryptedMediaKey && user.mediaKeySalt && user.mediaKeyIv);
-
-  const data: Record<string, unknown> = {
-    password: await bcrypt.hash(newPassword, 10),
-  };
-
-  if (hadEnvelope) {
-    if (
-      typeof mediaKeySalt !== 'string' ||
-      typeof encryptedMediaKey !== 'string' ||
-      typeof mediaKeyIv !== 'string'
-    ) {
-      throw new HttpError(
-        400,
-        'Thiếu media key envelope mới — đổi mật khẩu mà không re-wrap sẽ làm mất media đã mã hoá'
-      );
-    }
-    data['mediaKeySalt'] = mediaKeySalt;
-    data['encryptedMediaKey'] = encryptedMediaKey;
-    data['mediaKeyIv'] = mediaKeyIv;
-    data['mediaKeyVersion'] = mediaKeyVersion || 1;
-  }
-
-  const updated = await prisma.user.update({
+  await prisma.user.update({
     where: { id: userId },
-    data,
-    select: {
-      mediaKeySalt: true,
-      encryptedMediaKey: true,
-      mediaKeyIv: true,
-      mediaKeyVersion: true,
-    },
+    data: { password: await bcrypt.hash(newPassword, 10) },
   });
 
-  return { ok: true, ...updated };
+  return { ok: true };
 }
 
 export async function getUserStats(userId: string) {
