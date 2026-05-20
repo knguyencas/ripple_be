@@ -1,43 +1,15 @@
 import prisma from '../models/prisma';
 import { isLocalDate } from '../utils/date.utils';
 import { HttpError } from '../utils/http-error';
+import { calculateStreakFromDates, type StreakSnapshot } from '../utils/streak.utils';
 import { createNotification } from './notification.service';
 
 const STREAK_MILESTONES = new Set([3, 7, 14, 30, 60, 100]);
-const STREAK_MAX_GAP_MS = 24 * 60 * 60 * 1000;
-
-interface StreakSnapshot {
-  currentStreak: number;
-  lastLogDate: Date | null;
-}
 
 function sameStoredDate(a: Date | null, b: Date | null): boolean {
   if (!a && !b) return true;
   if (!a || !b) return false;
   return a.getTime() === b.getTime();
-}
-
-function calculateStreakFromDates(datesDesc: Date[], referenceDate: Date): StreakSnapshot {
-  if (datesDesc.length === 0) {
-    return { currentStreak: 0, lastLogDate: null };
-  }
-
-  const latest = datesDesc[0];
-  if (referenceDate.getTime() - latest.getTime() > STREAK_MAX_GAP_MS) {
-    return { currentStreak: 0, lastLogDate: latest };
-  }
-
-  let currentStreak = 1;
-  let previous = latest;
-
-  for (const current of datesDesc.slice(1)) {
-    const gap = previous.getTime() - current.getTime();
-    if (gap > STREAK_MAX_GAP_MS) break;
-    currentStreak += 1;
-    previous = current;
-  }
-
-  return { currentStreak, lastLogDate: latest };
 }
 
 export async function calculateCurrentStreak(
