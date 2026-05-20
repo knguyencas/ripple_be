@@ -17,3 +17,23 @@ services:
         sync: false
       - key: NLP_SERVICE_URL
         sync: false
+      - key: HF_TOKEN
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: APP_RESET_LINK_BASE
+        value: ripple://auth/reset-password
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: ADMIN_JWT_SECRET
+        sync: false
