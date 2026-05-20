@@ -61,6 +61,15 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const resetPin = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await userService.resetUserPin(req.userId!, req.body ?? {});
+    return res.json(result);
+  } catch (error) {
+    return sendControllerError(res, error, 'resetPin', 'Failed to reset PIN');
+  }
+};
+
 export const getStats = async (req: AuthRequest, res: Response) => {
   try {
     const stats = await userService.getUserStats(req.userId!);

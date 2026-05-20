@@ -23,6 +23,10 @@ interface MediaKeyInput {
   mediaKeyVersion?: number;
 }
 
+interface ResetPinInput {
+  password?: string;
+}
+
 const USER_PROFILE_SELECT = {
   id: true,
   email: true,
@@ -149,6 +153,38 @@ export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
       mediaKeyVersion: true,
     },
   });
+}
+
+/**
+ * Reset PIN: user quên PIN, dùng password để xác minh, sau đó WIPE envelope.
+ * Cảnh báo: tất cả media đã encrypt với envelope cũ sẽ KHÔNG decrypt được nữa.
+ * Client phải tạo PIN mới + envelope mới sau khi gọi endpoint này.
+ */
+export async function resetUserPin(userId: string, input: ResetPinInput) {
+  const { password } = input;
+
+  if (typeof password !== 'string' || password.length === 0) {
+    throw new HttpError(400, 'Vui lòng nhập mật khẩu để xác nhận');
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw new HttpError(404, 'User not found');
+
+  const valid = await bcrypt.compare(password, user.password);
+  if (!valid) throw new HttpError(401, 'Mật khẩu không đúng');
+
+  // Wipe envelope: media key cũ không còn cách nào lấy lại
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      mediaKeySalt: null,
+      encryptedMediaKey: null,
+      mediaKeyIv: null,
+      mediaKeyVersion: 1,
+    },
+  });
+
+  return { ok: true };
 }
 
 export async function changeUserPassword(userId: string, input: ChangePasswordInput) {

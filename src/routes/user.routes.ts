@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import {
-  pingStreak, getStreak, getStats, getMe, updateMe, updateAvatar, updateMediaKey, changePassword,
+  pingStreak, getStreak, getStats, getMe, updateMe, updateAvatar, updateMediaKey, changePassword, resetPin,
 } from '../controllers/user.controller';
 import { authMiddleware } from '../middlewares/auth.middleware';
 import { uploadAvatar } from '../middlewares/upload.middleware';
