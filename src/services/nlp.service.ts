@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 const NLP_URL = process.env.NLP_SERVICE_URL || 'http://localhost:8000';
+const HF_TOKEN = process.env.HF_TOKEN;
 
 interface NLPResult {
   severity:    string;
@@ -17,7 +18,10 @@ export async function analyzeText(text: string, userId: string): Promise<NLPResu
     const { data } = await axios.post<NLPResult>(
       `${NLP_URL}/analyze`,
       { text, user_id: userId },
-      { timeout: 15000 }
+      {
+        timeout: 15000,
+        headers: HF_TOKEN ? { Authorization: `Bearer ${HF_TOKEN}` } : undefined,
+      }
     );
     return data;
   } catch (err) {
