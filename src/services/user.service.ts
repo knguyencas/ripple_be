@@ -21,6 +21,8 @@ interface MediaKeyInput {
   encryptedMediaKey?: string;
   mediaKeyIv?: string;
   mediaKeyVersion?: number;
+  recoveryPin?: string;
+  pin?: string;
 }
 
 interface ResetPinInput {
@@ -43,6 +45,15 @@ const USER_PROFILE_SELECT = {
   mediaKeyIv: true,
   mediaKeyVersion: true,
 } as const;
+
+function normalizeRecoveryPin(value: unknown) {
+  if (typeof value !== 'string') throw new HttpError(400, 'PIN is required');
+  const pin = value.trim();
+  if (!/^\d{4,12}$/.test(pin)) {
+    throw new HttpError(400, 'PIN must be 4-12 digits');
+  }
+  return pin;
+}
 
 export async function getUserProfile(userId: string) {
   const user = await prisma.user.findUnique({
@@ -119,6 +130,7 @@ export async function updateUserAvatar(userId: string, avatar: string) {
 
 export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
   const { mediaKeySalt, encryptedMediaKey, mediaKeyIv, mediaKeyVersion } = input;
+  const recoveryPin = input.recoveryPin ?? input.pin;
 
   if (
     typeof mediaKeySalt !== 'string' ||
@@ -128,6 +140,9 @@ export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
     throw new HttpError(400, 'Invalid media key payload');
   }
 
+  const recoveryPinHash =
+    recoveryPin === undefined ? undefined : await bcrypt.hash(normalizeRecoveryPin(recoveryPin), 12);
+
   return prisma.user.update({
     where: { id: userId },
     data: {
@@ -135,6 +150,7 @@ export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
       encryptedMediaKey,
       mediaKeyIv,
       mediaKeyVersion: mediaKeyVersion || 1,
+      ...(recoveryPinHash ? { recoveryPinHash } : {}),
     },
     select: {
       id: true,
@@ -153,6 +169,15 @@ export async function updateUserMediaKey(userId: string, input: MediaKeyInput) {
       mediaKeyVersion: true,
     },
   });
+}
+
+export async function updateUserRecoveryPin(userId: string, input: Record<string, unknown>) {
+  const pin = normalizeRecoveryPin(input.pin ?? input.recoveryPin);
+  await prisma.user.update({
+    where: { id: userId },
+    data: { recoveryPinHash: await bcrypt.hash(pin, 12) },
+  });
+  return { ok: true, recoveryPinSet: true };
 }
 
 /**
@@ -181,6 +206,7 @@ export async function resetUserPin(userId: string, input: ResetPinInput) {
       encryptedMediaKey: null,
       mediaKeyIv: null,
       mediaKeyVersion: 1,
+      recoveryPinHash: null,
     },
   });
 

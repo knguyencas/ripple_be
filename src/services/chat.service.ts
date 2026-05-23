@@ -1,15 +1,14 @@
 import Groq from 'groq-sdk';
 import prisma from '../models/prisma';
 import { HttpError } from '../utils/http-error';
-import { buildSystemPrompt, JournalPromptContext } from './chat-prompt.service';
+import { buildSystemPrompt } from './chat-prompt.service';
 import { upsertTodayInsight } from './chat-insight.service';
-import { computePhaseContext } from './phase.service';
 import {
   computeProfileClass,
   getClassModifiers,
   refreshProfileClass,
 } from './profile-class.service';
-import { fetchLifestyleContext } from './lifestyle.service';
+import { buildWellnessSnapshot } from './wellness-snapshot.service';
 
 type ChatRole = 'user' | 'assistant' | 'system';
 
@@ -38,7 +37,10 @@ function normalizeMessages(messages: unknown): ChatMessage[] {
     const role = (message as { role: unknown }).role;
     const content = (message as { content: unknown }).content;
 
-    if ((role !== 'user' && role !== 'assistant' && role !== 'system') || typeof content !== 'string') {
+    if (
+      (role !== 'user' && role !== 'assistant' && role !== 'system') ||
+      typeof content !== 'string'
+    ) {
       throw new HttpError(400, 'Invalid message shape');
     }
 
@@ -46,66 +48,36 @@ function normalizeMessages(messages: unknown): ChatMessage[] {
   });
 }
 
-function buildJournalContext(
-  recentLogs: Array<{ moodScore: number; nlpEmotion: string | null }>
-): JournalPromptContext | null {
-  if (recentLogs.length === 0) return null;
-
-  const scores = recentLogs.map((log) => log.moodScore);
-  const avgMood = scores.reduce((a, b) => a + b, 0) / scores.length;
-  const trend = scores.length >= 2
-    ? (scores[0] > scores[scores.length - 1] ? 'improving' : 'declining')
-    : 'stable';
-  const recentEmotions = recentLogs
-    .map((log) => log.nlpEmotion)
-    .filter((emotion): emotion is string => Boolean(emotion));
-
-  return {
-    avgMood: Math.round(avgMood * 10) / 10,
-    trend,
-    recentEmotions,
-  };
-}
-
 export async function chatWithAI(userId: string, rawMessages: unknown) {
   const messages = normalizeMessages(rawMessages);
 
-  const [user, recentLogs, classInfo] = await Promise.all([
+  const [user, snapshot, classInfo] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { displayName: true, ageGroup: true },
     }),
-    prisma.personalLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-      select: { moodScore: true, nlpEmotion: true },
-    }),
+    buildWellnessSnapshot(userId),
     computeProfileClass(userId),
   ]);
 
   const mods = getClassModifiers(classInfo.cls);
-  const phaseCtx = await computePhaseContext(userId, classInfo.cls, mods);
-  const lifestyle = classInfo.cls === 'at_risk_baseline'
-    ? await fetchLifestyleContext(userId, 7)
-    : null;
 
   const systemPrompt = buildSystemPrompt(
     { displayName: user?.displayName, ageGroup: user?.ageGroup },
-    phaseCtx,
-    buildJournalContext(recentLogs),
-    lifestyle,
+    snapshot,
+    classInfo.cls,
     'vi'
   );
 
   const completion = await groq.chat.completions.create({
     model: 'llama-3.3-70b-versatile',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...messages,
-    ],
-    max_tokens: 500,
-    temperature: 0.8,
+    messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    // Giảm xuống để response ngắn gọn — bớt "máy móc, đưa loạt thông tin không cần thiết"
+    max_tokens: 320,
+    temperature: 0.75,
+    // Penalize repetition để bớt cấu trúc lặp lại kiểu AI
+    frequency_penalty: 0.3,
+    presence_penalty: 0.2,
   });
 
   const reply = completion.choices[0]?.message?.content || '';

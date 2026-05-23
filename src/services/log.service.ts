@@ -2,6 +2,7 @@ import prisma from '../models/prisma';
 import { cloudinary } from '../middlewares/upload.middleware';
 import { analyzeText, mapAlertLevel } from './nlp.service';
 import { getUserStreak, touchLogStreak } from './streak.service';
+import { upsertJournalDailyInsight } from './journal-insight.service';
 import { HttpError } from '../utils/http-error';
 
 interface CreateLogInput {
@@ -37,13 +38,36 @@ function parsePagination(limit: unknown, offset: unknown) {
   return { take, skip };
 }
 
-function triggerLogNlpAnalysis(logId: string, userId: string, note?: string | null) {
-  if (!note || note.trim().length < 5) return;
+function triggerLogNlpAnalysis(
+  logId: string,
+  userId: string,
+  note?: string | null,
+  logDate: Date = new Date()
+) {
+  // Fix B: nếu note quá ngắn/rỗng → CLEAR nlpScore cũ để tránh stale.
+  // Trước đây chỉ aggregate JDI với nlpScore cũ → JDI sai khi user xoá hết note.
+  if (!note || note.trim().length < 5) {
+    // updateMany: silent skip nếu log đã bị xoá trong lúc fire-and-forget chạy
+    void prisma.personalLog
+      .updateMany({
+        where: { id: logId },
+        data: { nlpScore: null, nlpEmotion: null, alertLevel: null },
+      })
+      .then(() => upsertJournalDailyInsight(userId, logDate))
+      .catch((e) =>
+        console.error('clear stale nlp / aggregate failed:', e)
+      );
+    return;
+  }
 
   void analyzeText(note, userId)
     .then(async (nlp) => {
-      if (!nlp) return;
-      await prisma.personalLog.update({
+      if (!nlp) {
+        await upsertJournalDailyInsight(userId, logDate);
+        return;
+      }
+      // updateMany: silent skip nếu log đã bị xoá trong lúc NLP đang chạy
+      const updated = await prisma.personalLog.updateMany({
         where: { id: logId },
         data: {
           nlpScore: nlp.phq_score,
@@ -51,10 +75,14 @@ function triggerLogNlpAnalysis(logId: string, userId: string, note?: string | nu
           alertLevel: mapAlertLevel(nlp),
         },
       });
+      if (updated.count === 0) return; // log bị xoá → bỏ qua aggregate
 
       if (nlp.risk_flag) {
         console.warn(`[RISK] userId=${userId} | severity=${nlp.severity} | c9=${nlp.c9_ideation}`);
       }
+
+      // Sau khi PersonalLog đã có nlpScore → recompute aggregate day + lifetime
+      await upsertJournalDailyInsight(userId, logDate);
     })
     .catch((error) => console.error('log NLP analysis failed:', error));
 }
@@ -88,6 +116,24 @@ export async function createLog(userId: string, input: CreateLogInput) {
     throw new HttpError(400, 'moodScore must be a number');
   }
 
+  // Fix A: enforce 1-log/day ở BE (FE đã enforce qua useTodayJournal, nhưng
+  // BE cần chống race condition / FE bug / direct API call).
+  // Dùng local day boundary để khớp với getTodayLog (user-facing "today").
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date();
+  todayEnd.setHours(23, 59, 59, 999);
+  const existingToday = await prisma.personalLog.findFirst({
+    where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
+    select: { id: true },
+  });
+  if (existingToday) {
+    throw new HttpError(
+      409,
+      'Bạn đã có nhật ký hôm nay. Vui lòng cập nhật log cũ thay vì tạo mới.'
+    );
+  }
+
   const log = await prisma.personalLog.create({
     data: {
       userId,
@@ -100,7 +146,7 @@ export async function createLog(userId: string, input: CreateLogInput) {
 
   await touchLogStreak(userId);
   await createAnonymousLog(userId, { mood, moodScore, factors, note });
-  triggerLogNlpAnalysis(log.id, userId, note);
+  triggerLogNlpAnalysis(log.id, userId, note, log.createdAt);
 
   return log;
 }
@@ -116,34 +162,69 @@ export async function getLogs(userId: string, limit: unknown, offset: unknown) {
 }
 
 export async function getLogStats(userId: string) {
-  const [logs, totalLogs, streak] = await Promise.all([
+  const since = new Date();
+  since.setUTCHours(0, 0, 0, 0);
+  since.setUTCDate(since.getUTCDate() - 29);
+
+  const [logs, totalLogs, streak, dailyInsights, userRow] = await Promise.all([
     prisma.personalLog.findMany({
-      where: { userId },
+      where: { userId, createdAt: { gte: since } },
       orderBy: { createdAt: 'desc' },
-      take: 30,
+      select: { moodScore: true, createdAt: true },
     }),
     prisma.personalLog.count({ where: { userId } }),
     getUserStreak(userId),
+    prisma.journalDailyInsight.findMany({
+      where: { userId, date: { gte: since } },
+      orderBy: { date: 'asc' },
+      select: { date: true, avgPhqScore: true, logCount: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { lifetimeJournalScore: true, totalJournalDays: true },
+    }),
   ]);
 
-  if (logs.length === 0) {
-    return { totalLogs: 0, avgMood: 0, streak: streak.currentStreak, weeklyData: [] };
+  if (logs.length === 0 && dailyInsights.length === 0) {
+    return {
+      totalLogs: 0,
+      avgMood: 0,
+      avgPhq: null,
+      lifetimePhq: userRow?.lifetimeJournalScore ?? 0,
+      streak: streak.currentStreak,
+      weeklyData: [],
+    };
   }
 
-  const avgMood = logs.reduce((sum, log) => sum + log.moodScore, 0) / logs.length;
+  const avgMood = logs.length
+    ? logs.reduce((sum, log) => sum + log.moodScore, 0) / logs.length
+    : 0;
+
+  const scoredDays = dailyInsights.filter((d) => d.avgPhqScore != null);
+  const totalLogsScored = scoredDays.reduce((s, d) => s + d.logCount, 0);
+  const avgPhq = totalLogsScored
+    ? scoredDays.reduce((s, d) => s + (d.avgPhqScore ?? 0) * d.logCount, 0) / totalLogsScored
+    : null;
+
+  const phqByDate = new Map<string, number | null>();
+  for (const d of dailyInsights) {
+    phqByDate.set(d.date.toISOString().slice(0, 10), d.avgPhqScore);
+  }
+
   const weeklyData = Array.from({ length: 7 }, (_, i) => {
     const date = new Date();
     date.setDate(date.getDate() - (6 - i));
-    const dayLogs = logs.filter((log) => {
-      const logDate = new Date(log.createdAt);
-      return logDate.toDateString() === date.toDateString();
-    });
+    const dayKey = date.toISOString().slice(0, 10);
+    const dayLogs = logs.filter(
+      (log) => new Date(log.createdAt).toISOString().slice(0, 10) === dayKey
+    );
 
     return {
-      date: date.toISOString().split('T')[0],
+      date: dayKey,
       avgMood: dayLogs.length
         ? dayLogs.reduce((sum, log) => sum + log.moodScore, 0) / dayLogs.length
         : null,
+      avgPhq: phqByDate.get(dayKey) ?? null,
       count: dayLogs.length,
     };
   });
@@ -151,6 +232,11 @@ export async function getLogStats(userId: string) {
   return {
     totalLogs,
     avgMood: Math.round(avgMood * 10) / 10,
+    avgPhq: avgPhq != null ? Math.round(avgPhq * 10) / 10 : null,
+    lifetimePhq: userRow?.lifetimeJournalScore
+      ? Math.round(userRow.lifetimeJournalScore * 10) / 10
+      : 0,
+    totalJournalDays: userRow?.totalJournalDays ?? 0,
     streak: streak.currentStreak,
     weeklyData,
   };
@@ -209,7 +295,20 @@ export async function updateLog(userId: string, id: string, input: UpdateLogInpu
   if (input.note !== undefined) data.note = input.note;
 
   const updated = await prisma.personalLog.update({ where: { id }, data });
-  triggerLogNlpAnalysis(id, userId, input.note);
+
+  // Fix C: chỉ re-run NLP khi note THẬT SỰ đổi (tiết kiệm Groq/HF compute).
+  // - Note đổi → triggerLogNlpAnalysis (re-NLP + clear-stale nếu rỗng + recompute JDI).
+  // - Note không đổi (chỉ sửa mood/factors) → bỏ qua NLP nhưng vẫn upsert JDI
+  //   vì factorsHit có thể đổi.
+  const noteChanged = input.note !== undefined && input.note !== existing.note;
+  if (noteChanged) {
+    triggerLogNlpAnalysis(id, userId, input.note, existing.createdAt);
+  } else {
+    void upsertJournalDailyInsight(userId, existing.createdAt).catch((e) =>
+      console.error('journal aggregate (no-note-change) failed:', e)
+    );
+  }
+
   return updated;
 }
 
@@ -250,7 +349,12 @@ export async function deleteLog(userId: string, id: string) {
     ),
   ]);
 
+  const deletedAt = log.createdAt;
   await prisma.personalLog.delete({ where: { id } });
   await touchLogStreak(userId);
+  // Recompute aggregate cho ngày bị xoá log
+  await upsertJournalDailyInsight(userId, deletedAt).catch((e) =>
+    console.error('journal aggregate (delete) failed:', e)
+  );
   return { success: true };
 }

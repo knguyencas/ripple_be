@@ -5,6 +5,7 @@ import {
   requestPasswordReset,
   resetUserPassword,
 } from '../services/auth.service';
+import { createPinVerifiedRecoveryRequest } from '../services/account-recovery.service';
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -43,5 +44,18 @@ export const resetPassword = async (req: Request, res: Response) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Reset password failed';
     res.status(400).json({ error: message });
+  }
+};
+
+export const requestPinRecovery = async (req: Request, res: Response) => {
+  try {
+    const result = await createPinVerifiedRecoveryRequest(req.body ?? {});
+    res.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'PIN recovery failed';
+    const status = 'status' in Object(err) && typeof Object(err).status === 'number'
+      ? Object(err).status
+      : 400;
+    res.status(status).json({ error: message });
   }
 };

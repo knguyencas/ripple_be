@@ -7,6 +7,16 @@ import { sendPasswordResetEmail } from './email.service';
 
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 60 phút
 
+function normalizeOptionalRecoveryPin(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') throw new Error('PIN khôi phục không hợp lệ');
+  const pin = value.trim();
+  if (!/^\d{4,12}$/.test(pin)) {
+    throw new Error('PIN khôi phục phải gồm 4-12 chữ số');
+  }
+  return pin;
+}
+
 function authUserPayload(user: {
   id: string;
   email: string | null;
@@ -43,6 +53,8 @@ export const registerUser = async (input: RegisterInput) => {
     encryptedMediaKey,
     mediaKeyIv,
     mediaKeyVersion,
+    recoveryPin,
+    pin,
   } = input;
 
   const existingUsername = await prisma.user.findUnique({
@@ -62,6 +74,10 @@ export const registerUser = async (input: RegisterInput) => {
   }
 
   const hashed = await bcrypt.hash(password, 10);
+  const normalizedRecoveryPin = normalizeOptionalRecoveryPin(recoveryPin ?? pin);
+  const recoveryPinHash = normalizedRecoveryPin
+    ? await bcrypt.hash(normalizedRecoveryPin, 12)
+    : undefined;
   let user;
   try {
     user = await prisma.user.create({
@@ -73,6 +89,7 @@ export const registerUser = async (input: RegisterInput) => {
         encryptedMediaKey: encryptedMediaKey || null,
         mediaKeyIv: mediaKeyIv || null,
         mediaKeyVersion: mediaKeyVersion || 1,
+        ...(recoveryPinHash ? { recoveryPinHash } : {}),
         ...(email ? { email } : {})
       }
     });

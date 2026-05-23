@@ -14,12 +14,9 @@ import notificationRoutes from './routes/notification.routes';
 import adminRoutes from './routes/admin.routes';
 
 const app = express();
-const adminStaticDir = path.join(process.cwd(), 'public', 'admin');
 
 app.use(cors());
 app.use(express.json());
-
-app.use('/admin', express.static(adminStaticDir));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
@@ -32,10 +29,6 @@ app.use('/api/encouragement', encouragementRoutes);
 app.use('/api/meditation', meditationRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
-
-app.get(/^\/admin(?:\/.*)?$/, (_req, res) => {
-  res.sendFile(path.join(adminStaticDir, 'index.html'));
-});
 
 app.get('/', (_req, res) => {
   res.json({ message: 'Ripple API is running' });

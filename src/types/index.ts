@@ -7,6 +7,8 @@ export interface RegisterInput {
   encryptedMediaKey?: string;
   mediaKeyIv?: string;
   mediaKeyVersion?: number;
+  recoveryPin?: string;
+  pin?: string;
 }
 
 export interface LoginInput {
