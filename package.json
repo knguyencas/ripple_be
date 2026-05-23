@@ -7,7 +7,11 @@
     "dev": "nodemon --watch src --ext ts --exec ts-node src/index.ts",
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
-    "seed:meditation": "ts-node --project prisma/tsconfig.json prisma/seed-meditation.ts"
+    "seed:meditation": "ts-node --project prisma/tsconfig.json prisma/seed-meditation.ts",
+    "backfill:wellness": "ts-node --project prisma/tsconfig.json prisma/backfill-wellness.ts",
+    "test:nlp-pipeline": "ts-node --project prisma/tsconfig.json prisma/test-nlp-pipeline.ts",
+    "test:log-fixes": "ts-node --project prisma/tsconfig.json prisma/test-log-fixes.ts",
+    "check:phq": "ts-node --project prisma/tsconfig.json prisma/check-user-phq.ts"
   },
   "keywords": [],
   "author": "",

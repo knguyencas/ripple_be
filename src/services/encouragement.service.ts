@@ -1,104 +1,175 @@
 import prisma from '../models/prisma';
-import { computePhaseContext } from './phase.service';
-import { computeProfileClass, getClassModifiers } from './profile-class.service';
+import {
+  buildWellnessSnapshot,
+  WellnessSnapshot,
+  SeverityBand,
+} from './wellness-snapshot.service';
 
-function pickMoodMessage(phase: string, trend: string, avgMood7d: number | null): string {
-  if (phase === 'new_user') {
-    return 'Chào mừng bạn đến Ripple. Ghi lại vài ngày nữa để bạn thấy rõ hơn xu hướng tâm trạng của mình nhé.';
-  }
+/**
+ * Mood message — bases on PHQ-9 band from last 7 logs + ideation + trend.
+ * KHÔNG dùng moodScore (icon) — chỉ dùng tín hiệu NLP thật.
+ */
+function pickMoodMessage(snap: WellnessSnapshot): string {
+  const { recent7Logs, lifetime, hasRecentIdeation, recentChat7d } = snap;
 
-  if (trend === 'improving') {
-    return 'Xu hướng cảm xúc gần đây đang tốt lên. Dù chậm rãi thôi, đó vẫn là một tín hiệu đáng ghi nhận.';
-  }
-
-  if (trend === 'declining') {
-    if (phase === 'early_warning' || phase === 'chronic_distress') {
-      return 'Mấy hôm nay có vẻ hơi nặng nề. Bạn không cần phải mạnh mẽ một mình, thử nói chuyện với ai đó bạn tin tưởng nhé.';
+  // Chưa có log NLP nào
+  if (recent7Logs.daysCovered === 0) {
+    if (lifetime.totalJournalDays === 0) {
+      return 'Khi bạn sẵn sàng, ghi vài dòng nhật ký — mình sẽ hiểu bạn hơn qua mỗi lần viết.';
     }
-    return 'Tâm trạng có hơi đi xuống gần đây. Nhớ nghỉ ngơi, hít thở sâu một chút, và cho bản thân một khoảng lặng nhé.';
+    return 'Đã lâu chưa viết — không sao, vài câu cũng đủ để bạn nhìn lại hôm nay.';
   }
 
-  if (phase === 'volatile') {
-    return 'Cảm xúc đang lên xuống khá nhanh. Khi mọi thứ rối hơn, thử viết ra 3 điều nhỏ khiến bạn dễ chịu hơn hôm nay.';
+  if (hasRecentIdeation) {
+    return 'Mấy ngày này có những điều khá nặng trong những gì bạn viết. Mình ở đây — và nếu được, thử chia sẻ với một người bạn tin tưởng. Không phải vì bạn yếu, mà vì bạn xứng đáng được lắng nghe.';
   }
 
-  if (phase === 'stable_ok') {
-    return avgMood7d != null && avgMood7d >= 6
-      ? 'Tâm trạng tuần này khá ổn. Giữ nhịp sống này, những thói quen nhỏ tích cực tạo ra khác biệt lớn.'
-      : 'Mọi thứ đang ổn định. Dành một chút thời gian làm điều gì đó mình thích hôm nay nhé.';
+  const band = recent7Logs.severityBand;
+  const trend = recent7Logs.trend;
+  const historicallyHeavy = lifetime.totalJournalDays >= 14 && lifetime.avgJournalPhq >= 10;
+
+  if (band === 'severe') {
+    if (trend === 'improving')
+      return 'Tuần này vẫn còn nặng, nhưng có vẻ đang nhẹ dần. Cứ chậm thôi cũng được — không cần phải tốt lên ngay.';
+    return 'Nội dung mấy ngày qua khá nặng. Một cuộc nói chuyện với chuyên gia có thể giúp được nhiều hơn bạn nghĩ. Mình không thay được điều đó.';
   }
 
-  if (phase === 'recovery') {
-    return 'Bạn đang đi trên hành trình hồi phục, chậm mà chắc. Kiên nhẫn với chính mình là điều quan trọng nhất lúc này.';
+  if (band === 'mod_severe') {
+    if (trend === 'improving')
+      return 'Vẫn chưa dễ, nhưng có vẻ đang nhẹ dần so với đầu tuần. Ghi nhận điều đó.';
+    if (trend === 'declining')
+      return 'Nội dung gần đây đang nặng dần lên. Cho bản thân chậm lại một chút — đừng đòi hỏi phải vận hành như thường lệ.';
+    return 'Mấy hôm nay khá trĩu. Không cần phải vượt qua một mình, có ai bạn muốn nhắn tin lúc này không?';
   }
 
-  return 'Một ngày mới, bắt đầu với một việc nhỏ bạn có thể làm cho bản thân.';
+  if (band === 'moderate') {
+    if (trend === 'declining')
+      return 'Mấy hôm nay có vẻ trĩu hơn trước. Đừng vội đánh giá bản thân — chỉ là một quãng dốc.';
+    if (trend === 'improving')
+      return 'Có những lúc khó, nhưng nội dung gần đây bắt đầu nhẹ dần. Giữ nhịp này.';
+    if (historicallyHeavy)
+      return 'Mức này quen thuộc với bạn rồi. Hôm nay làm một điều nhỏ cho bản thân thôi cũng đã đủ.';
+    return 'Cảm xúc dạo này khá hỗn hợp. Không cần phải ổn ngay — viết ra đã là một cách tự chăm sóc.';
+  }
+
+  if (band === 'mild') {
+    if (trend === 'declining' && !historicallyHeavy)
+      return 'Bình thường bạn nhẹ hơn — tuần này có chút chùng xuống. Nghỉ một chút nếu cần.';
+    if (recentChat7d.elevatedDays >= 3)
+      return 'Nhật ký nhẹ nhưng những gì bạn chia sẻ với Sora gần đây có vẻ nặng hơn. Cả hai đều thật — không cần phải chọn.';
+    return 'Có những khoảnh khắc không hoàn toàn dễ chịu, nhưng tổng thể vẫn ổn. Bạn đang xử lý tốt.';
+  }
+
+  // minimal
+  if (trend === 'improving' && historicallyHeavy)
+    return 'Bạn đang nhẹ hơn so với trước rất nhiều. Mừng cùng bạn một chút.';
+  if (trend === 'improving') return 'Một tuần khá yên và có vẻ đang nhẹ dần. Tận hưởng nó.';
+  return 'Một tuần khá yên. Viết tiếp khi có gì muốn nói.';
 }
 
-function pickWaterMessage(glasses: number, goal: number): string {
-  if (glasses === 0) return 'Hôm nay bạn chưa uống nước. Hãy bắt đầu với một ly ngay nhé.';
-  if (glasses < goal / 2) return `Bạn mới uống ${glasses}/${goal} ly. Uống thêm một ly ngay bây giờ nhé.`;
-  if (glasses < goal) return `Đã ${glasses}/${goal} ly, còn ${goal - glasses} ly nữa là đạt mục tiêu.`;
-  return `Bạn đã đạt mục tiêu ${goal} ly hôm nay.`;
+/**
+ * Water/steps/sleep — tone điều chỉnh theo band.
+ * Khi user đang heavy band, không thúc giục, không lecture.
+ */
+function pickWaterMessage(glasses: number, goal: number, band: SeverityBand): string {
+  const heavy = band === 'severe' || band === 'mod_severe';
+  if (heavy) {
+    if (glasses === 0) return 'Một ly nước khi bạn nhớ ra cũng đủ. Không cần ép.';
+    if (glasses < goal / 2) return `${glasses}/${goal} ly — bạn vẫn đang chăm sóc bản thân.`;
+    return `${glasses}/${goal} ly. Ghi nhận điều đó.`;
+  }
+  if (glasses === 0) return 'Bắt đầu hôm nay với một ly nước nhé.';
+  if (glasses < goal / 2) return `Mới ${glasses}/${goal} ly. Thêm một ly nữa khi tiện.`;
+  if (glasses < goal) return `${glasses}/${goal} ly — còn ${goal - glasses} ly là đủ.`;
+  return `Đã đủ ${goal} ly hôm nay.`;
 }
 
-function pickStepsMessage(steps: number | null, avgSteps: number | null): string {
-  if (steps == null) return 'Chưa có dữ liệu bước chân hôm nay. Một chuyến đi bộ ngắn cũng đủ giúp tâm trạng tốt lên.';
-  if (steps < 2000) return 'Hôm nay cơ thể vận động còn ít. Thử đi bộ 10 phút để cơ thể và tinh thần dễ chịu hơn.';
-  if (steps < 5000) return `Đã đi ${steps.toLocaleString('vi-VN')} bước. Thêm vài vòng dạo nhẹ là đủ cho cả ngày.`;
-  if (avgSteps != null && steps > avgSteps * 1.2) return `${steps.toLocaleString('vi-VN')} bước, hôm nay bạn năng động hơn mức trung bình.`;
-  return `Đã ${steps.toLocaleString('vi-VN')} bước. Vận động đều đặn giúp tinh thần ổn định hơn.`;
+function pickStepsMessage(
+  steps: number | null,
+  avgSteps: number | null,
+  band: SeverityBand
+): string {
+  const heavy = band === 'severe' || band === 'mod_severe';
+
+  if (steps == null) {
+    if (heavy)
+      return 'Hôm nay không cần phải vận động nhiều — nghỉ cũng là một cách phục hồi.';
+    return 'Chưa có dữ liệu bước hôm nay. Một vòng đi bộ ngắn cũng giúp đầu nhẹ hơn.';
+  }
+
+  if (heavy) {
+    if (steps < 1000) return 'Nghỉ ngơi cũng quan trọng như vận động. Đừng tự ép.';
+    if (steps < 4000)
+      return `${steps.toLocaleString('vi-VN')} bước — đáng ghi nhận trong một ngày khó.`;
+    return `${steps.toLocaleString('vi-VN')} bước. Tốt cho hôm nay rồi.`;
+  }
+
+  if (steps < 2000) return 'Một chuyến đi bộ 10 phút có thể giúp tâm trạng tốt hơn.';
+  if (avgSteps && steps > avgSteps * 1.2)
+    return `${steps.toLocaleString('vi-VN')} bước — hôm nay năng động hơn thường ngày.`;
+  if (steps < 5000) return `${steps.toLocaleString('vi-VN')} bước. Thêm vài vòng dạo là đủ.`;
+  return `${steps.toLocaleString('vi-VN')} bước. Giữ đều đặn giúp tinh thần ổn định.`;
 }
 
-function pickSleepMessage(minutes: number | null): string {
-  if (minutes == null) return 'Chưa có dữ liệu giấc ngủ đêm qua. Ngủ đủ là một cách đơn giản để chăm sóc bản thân.';
-  const hours = minutes / 60;
-  if (hours < 5) return 'Đêm qua bạn ngủ khá ít. Thử đi ngủ sớm hơn 30 phút tối nay xem sao.';
-  if (hours < 6.5) return 'Giấc ngủ hơi thiếu. Tắt màn hình 30 phút trước khi ngủ có thể giúp bạn vào giấc dễ hơn.';
-  if (hours > 9.5) return 'Bạn ngủ khá nhiều đêm qua. Nếu vẫn thấy mệt, thử vận động nhẹ buổi sáng để tỉnh táo hơn.';
-  return `Ngủ được ${hours.toFixed(1)} giờ, khá ổn. Duy trì giờ đi ngủ đều đặn để cơ thể quen nhịp.`;
+function pickSleepMessage(minutes: number | null, band: SeverityBand): string {
+  const heavy = band === 'severe' || band === 'mod_severe';
+
+  if (minutes == null) {
+    if (heavy) return 'Chưa có dữ liệu giấc ngủ. Giấc ngủ đều rất quan trọng lúc này.';
+    return 'Chưa có dữ liệu giấc ngủ. Ngủ đủ là một cách đơn giản để chăm sóc bản thân.';
+  }
+  const h = minutes / 60;
+
+  if (heavy) {
+    if (h < 5)
+      return 'Đêm qua ngủ khá ít — điều này có thể đang góp phần làm mọi thứ nặng hơn. Tối nay thử đi ngủ sớm hơn 30 phút.';
+    if (h > 10) return 'Ngủ nhiều có thể là cơ thể đang cần phục hồi. Không sao.';
+    return `${h.toFixed(1)}h — duy trì giấc ngủ ổn định giúp bạn rất nhiều giai đoạn này.`;
+  }
+
+  if (h < 5) return 'Đêm qua ngủ khá ít. Tối nay thử đi ngủ sớm hơn 30 phút.';
+  if (h < 6.5) return 'Giấc ngủ hơi thiếu. Tắt màn hình 30 phút trước khi ngủ có thể giúp.';
+  if (h > 9.5) return 'Ngủ khá nhiều. Vận động nhẹ buổi sáng giúp tỉnh táo hơn.';
+  return `Ngủ ${h.toFixed(1)}h — ổn. Duy trì giờ ngủ đều đặn.`;
 }
 
 export async function getEncouragement(userId: string) {
+  const snapshot = await buildWellnessSnapshot(userId);
+
   const today = new Date();
-  const todayStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-  const sevenDaysAgo = new Date(todayStart);
-  sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
+  const todayStart = new Date(
+    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
+  );
 
-  const classInfo = await computeProfileClass(userId);
-  const mods = getClassModifiers(classInfo.cls);
-  const phaseCtx = await computePhaseContext(userId, classInfo.cls, mods);
-
-  const [recentLogs, todayWater, todaySteps, lastSleep, weekSteps] = await Promise.all([
-    prisma.personalLog.findMany({
-      where: { userId, createdAt: { gte: sevenDaysAgo } },
-      select: { moodScore: true },
+  const [todayWater, todaySteps, lastSleep] = await Promise.all([
+    prisma.waterIntake.findUnique({
+      where: { userId_date: { userId, date: todayStart } },
     }),
-    prisma.waterIntake.findUnique({ where: { userId_date: { userId, date: todayStart } } }),
-    prisma.stepCount.findUnique({ where: { userId_date: { userId, date: todayStart } } }),
+    prisma.stepCount.findUnique({
+      where: { userId_date: { userId, date: todayStart } },
+    }),
     prisma.sleepSession.findFirst({
       where: { userId },
       orderBy: { wakeTime: 'desc' },
       select: { duration: true },
     }),
-    prisma.stepCount.findMany({
-      where: { userId, date: { gte: sevenDaysAgo } },
-      select: { steps: true },
-    }),
   ]);
 
-  const avgMood7d = recentLogs.length > 0
-    ? recentLogs.reduce((sum, log) => sum + log.moodScore, 0) / recentLogs.length
-    : null;
-
-  const avgSteps = weekSteps.length > 0
-    ? weekSteps.reduce((sum, row) => sum + row.steps, 0) / weekSteps.length
-    : null;
+  const band = snapshot.recent7Logs.severityBand;
 
   return {
-    mood: pickMoodMessage(phaseCtx.phase, phaseCtx.trend, avgMood7d),
-    water: pickWaterMessage(todayWater?.glasses ?? 0, todayWater?.goal ?? 8),
-    steps: pickStepsMessage(todaySteps?.steps ?? null, avgSteps),
-    sleep: pickSleepMessage(lastSleep?.duration ?? null),
+    mood: pickMoodMessage(snapshot),
+    water: pickWaterMessage(todayWater?.glasses ?? 0, todayWater?.goal ?? 8, band),
+    steps: pickStepsMessage(todaySteps?.steps ?? null, snapshot.lifestyle.avgSteps, band),
+    sleep: pickSleepMessage(lastSleep?.duration ?? null, band),
+    // Để debug / future analytics — FE có thể bỏ qua
+    _debug: {
+      band,
+      trend: snapshot.recent7Logs.trend,
+      avgPhq7: snapshot.recent7Logs.avgPhq,
+      lifetimePhq: snapshot.lifetime.avgJournalPhq,
+      combinedLevel: snapshot.combinedLevel,
+      hasRecentIdeation: snapshot.hasRecentIdeation,
+    },
   };
 }

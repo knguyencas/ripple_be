@@ -8,6 +8,63 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum AdminRole {
+  SUPER_ADMIN
+  MANAGER
+}
+
+enum WellnessPeriodType {
+  WEEK
+  MONTH
+  QUARTER
+  YEAR
+}
+
+enum AccountRecoveryStatus {
+  PIN_VERIFIED
+  COMPLETED
+  REJECTED
+  EXPIRED
+}
+
+model AdminAccount {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  username     String    @unique
+  password     String
+  displayName  String?
+  role         AdminRole @default(MANAGER)
+  isRoot       Boolean   @default(false)
+  active       Boolean   @default(true)
+  createdById  String?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  createdBy     AdminAccount?    @relation("AdminCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAdmins AdminAccount[]   @relation("AdminCreatedBy")
+  auditLogs     AdminAuditLog[]  @relation("AdminActor")
+  reviewedRecoveryRequests AccountRecoveryRequest[] @relation("AdminReviewedRecoveryRequests")
+
+  @@index([role, active])
+  @@index([createdById])
+}
+
+model AdminAuditLog {
+  id           String   @id @default(cuid())
+  actorAdminId String?
+  action       String
+  targetType   String
+  targetId     String?
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  actor AdminAccount? @relation("AdminActor", fields: [actorAdminId], references: [id], onDelete: SetNull)
+
+  @@index([actorAdminId, createdAt])
+  @@index([targetType, targetId])
+}
+
 model User {
   id                    String    @id @default(cuid())
   email                 String?   @unique
@@ -26,21 +83,97 @@ model User {
   encryptedMediaKey     String?
   mediaKeyIv            String?
   mediaKeyVersion       Int       @default(1)
+  recoveryPinHash       String?
   passwordResetToken    String?   @unique
   passwordResetExpires  DateTime?
   createdAt             DateTime  @default(now())
 
-  personalLogs       PersonalLog[]
-  anonymousLogs      AnonymousLog[]
-  stepCounts         StepCount[]
-  sleepSessions      SleepSession[]
-  audioRecordings    AudioRecording[]
-  photoAttachments   PhotoAttachment[]
-  waterIntakes       WaterIntake[]
-  chatInsights       ChatInsight[]
-  feedbacks          Feedback[]
-  meditationSessions MeditationSession[]
-  notifications      Notification[]
+  firstLogDate          DateTime?
+  lifetimeJournalScore  Float     @default(0)
+  totalJournalDays      Int       @default(0)
+  lifetimeChatScore     Float     @default(0)
+  totalChatDays         Int       @default(0)
+
+  personalLogs         PersonalLog[]
+  anonymousLogs        AnonymousLog[]
+  stepCounts           StepCount[]
+  sleepSessions        SleepSession[]
+  audioRecordings      AudioRecording[]
+  photoAttachments     PhotoAttachment[]
+  waterIntakes         WaterIntake[]
+  chatInsights         ChatInsight[]
+  journalDailyInsights JournalDailyInsight[]
+  feedbacks            Feedback[]
+  meditationSessions   MeditationSession[]
+  notifications        Notification[]
+  wellnessAggregates   UserWellnessAggregate[]
+  accountRecoveryRequests AccountRecoveryRequest[]
+}
+
+model AccountRecoveryRequest {
+  id                String                @id @default(cuid())
+  userId            String
+  status            AccountRecoveryStatus @default(PIN_VERIFIED)
+  reason            String?
+  requestedAt       DateTime              @default(now())
+  pinVerifiedAt     DateTime?
+  expiresAt         DateTime
+  reviewedByAdminId String?
+  completedAt       DateTime?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewedByAdmin AdminAccount? @relation("AdminReviewedRecoveryRequests", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status, expiresAt])
+  @@index([status, expiresAt])
+  @@index([reviewedByAdminId, createdAt])
+}
+
+model UserWellnessAggregate {
+  id                 String             @id @default(cuid())
+  userId             String
+  periodType         WellnessPeriodType
+  periodStart        DateTime
+  periodEnd          DateTime
+  avgPhqScore        Float?
+  maxPhqScore        Float?
+  avgMoodScore       Float?
+  dominantAlertLevel String?
+  logCount           Int                @default(0)
+  chatAlertAvg       Float?
+  chatAlertMax       Float?
+  chatMessageCount   Int                @default(0)
+  topKeywords        String[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, periodType, periodStart])
+  @@index([userId, periodType, periodStart])
+  @@index([periodType, periodStart])
+}
+
+model JournalDailyInsight {
+  id              String   @id @default(cuid())
+  userId          String
+  date            DateTime
+  logCount        Int      @default(0)
+  avgPhqScore     Float?   // mean PHQ-9 (0-27) of logs that day
+  maxPhqScore     Float?
+  dominantLevel   String?  // 'low' | 'moderate' | 'high'
+  dominantEmotion String?  // 'minimal'..'severe'
+  hasIdeation     Boolean  @default(false)
+  factorsHit      String[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
 }
 
 model MeditationSound {

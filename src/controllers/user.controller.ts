@@ -52,6 +52,15 @@ export const updateMediaKey = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export const updateRecoveryPin = async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await userService.updateUserRecoveryPin(req.userId!, req.body ?? {});
+    return res.json(result);
+  } catch (error) {
+    return sendControllerError(res, error, 'updateRecoveryPin', 'Failed to update recovery PIN');
+  }
+};
+
 export const changePassword = async (req: AuthRequest, res: Response) => {
   try {
     const result = await userService.changeUserPassword(req.userId!, req.body ?? {});

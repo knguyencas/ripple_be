@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client';
 import prisma from '../models/prisma';
 import { dateKeyUTC, toDateOnlyUTC } from '../utils/date.utils';
 import { HttpError } from '../utils/http-error';
+import { findActiveRecoveryRequestForUser } from './account-recovery.service';
 import { refreshProfileClass } from './profile-class.service';
 
 const MAX_DAYS = 365;
@@ -13,6 +14,9 @@ type TimelineRow = {
   date: string;
   signups: number;
   logs: number;
+  activeUserIds: Set<string>;
+  estimatedUsageMinutes: number;
+  chatMessages: number;
   moodTotal: number;
   moodCount: number;
   avgMood: number | null;
@@ -22,6 +26,20 @@ type TimelineRow = {
   waterGoal: number | null;
   meditationMinutes: number;
   chatAlertScore: number | null;
+};
+
+type WellnessPeriod = 'WEEK' | 'MONTH' | 'QUARTER' | 'YEAR';
+
+type WellnessAggregateBucket = {
+  periodType: WellnessPeriod;
+  periodStart: Date;
+  periodEnd: Date;
+  phqScores: number[];
+  moodScores: number[];
+  alertCounts: Record<string, number>;
+  chatScores: number[];
+  chatMessageCount: number;
+  keywordCounts: Record<string, number>;
 };
 
 function parseIntParam(value: unknown, fallback: number, max: number) {
@@ -50,6 +68,9 @@ function makeTimeline(days: number, from: Date) {
       date: key,
       signups: 0,
       logs: 0,
+      activeUserIds: new Set<string>(),
+      estimatedUsageMinutes: 0,
+      chatMessages: 0,
       moodTotal: 0,
       moodCount: 0,
       avgMood: null,
@@ -74,6 +95,11 @@ function average(values: number[]) {
   return round(values.reduce((sum, value) => sum + value, 0) / values.length);
 }
 
+function maxValue(values: number[]) {
+  if (!values.length) return null;
+  return Math.max(...values);
+}
+
 function increment(map: Record<string, number>, key: string | null | undefined, amount = 1) {
   const normalized = key?.trim() || 'unknown';
   map[normalized] = (map[normalized] ?? 0) + amount;
@@ -84,6 +110,108 @@ function topEntries(map: Record<string, number>, limit = 10) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([label, count]) => ({ label, count }));
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function bucketActivityFrequency(activeDayCounts: number[]) {
+  const buckets = [
+    { label: '1 day', min: 1, max: 1, count: 0 },
+    { label: '2-3 days', min: 2, max: 3, count: 0 },
+    { label: '4-7 days', min: 4, max: 7, count: 0 },
+    { label: '8-14 days', min: 8, max: 14, count: 0 },
+    { label: '15+ days', min: 15, max: Number.POSITIVE_INFINITY, count: 0 },
+  ];
+
+  for (const activeDays of activeDayCounts) {
+    const bucket = buckets.find((item) => activeDays >= item.min && activeDays <= item.max);
+    if (bucket) bucket.count += 1;
+  }
+
+  return buckets.map(({ label, count }) => ({ label, count }));
+}
+
+function topLabels(map: Record<string, number>, limit = 12) {
+  return topEntries(map, limit).map((item) => item.label);
+}
+
+function dominantLabel(map: Record<string, number>) {
+  return topEntries(map, 1)[0]?.label ?? null;
+}
+
+function startOfUTCWeek(date: Date) {
+  const start = toDateOnlyUTC(date);
+  const day = start.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  start.setUTCDate(start.getUTCDate() + mondayOffset);
+  return start;
+}
+
+function startOfUTCMonth(date: Date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function startOfUTCQuarter(date: Date) {
+  const quarterMonth = Math.floor(date.getUTCMonth() / 3) * 3;
+  return new Date(Date.UTC(date.getUTCFullYear(), quarterMonth, 1));
+}
+
+function startOfUTCYear(date: Date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+}
+
+function periodStart(date: Date, periodType: WellnessPeriod) {
+  if (periodType === 'WEEK') return startOfUTCWeek(date);
+  if (periodType === 'MONTH') return startOfUTCMonth(date);
+  if (periodType === 'QUARTER') return startOfUTCQuarter(date);
+  return startOfUTCYear(date);
+}
+
+function periodEnd(start: Date, periodType: WellnessPeriod) {
+  const end = new Date(start);
+  if (periodType === 'WEEK') end.setUTCDate(end.getUTCDate() + 7);
+  if (periodType === 'MONTH') end.setUTCMonth(end.getUTCMonth() + 1);
+  if (periodType === 'QUARTER') end.setUTCMonth(end.getUTCMonth() + 3);
+  if (periodType === 'YEAR') end.setUTCFullYear(end.getUTCFullYear() + 1);
+  end.setUTCMilliseconds(end.getUTCMilliseconds() - 1);
+  return end;
+}
+
+function aggregateBucket(
+  buckets: Map<string, WellnessAggregateBucket>,
+  date: Date,
+  periodType: WellnessPeriod
+) {
+  const start = periodStart(date, periodType);
+  const key = `${periodType}:${dateKeyUTC(start)}`;
+  const existing = buckets.get(key);
+  if (existing) return existing;
+
+  const bucket: WellnessAggregateBucket = {
+    periodType,
+    periodStart: start,
+    periodEnd: periodEnd(start, periodType),
+    phqScores: [],
+    moodScores: [],
+    alertCounts: {},
+    chatScores: [],
+    chatMessageCount: 0,
+    keywordCounts: {},
+  };
+  buckets.set(key, bucket);
+  return bucket;
+}
+
+function pushToAggregateBuckets(
+  buckets: Map<string, WellnessAggregateBucket>,
+  date: Date,
+  apply: (bucket: WellnessAggregateBucket) => void
+) {
+  (['WEEK', 'MONTH', 'QUARTER', 'YEAR'] as WellnessPeriod[]).forEach((periodType) => {
+    apply(aggregateBucket(buckets, date, periodType));
+  });
 }
 
 function isElevatedAlert(level: string | null | undefined) {
@@ -98,25 +226,65 @@ function maxDate(values: Array<Date | null | undefined>) {
   return new Date(Math.max(...timestamps));
 }
 
-function userSearchWhere(search: unknown, profileClass: unknown): Prisma.UserWhereInput {
+function phqBandWhere(phqBand: string): Prisma.PersonalLogWhereInput | null {
+  const ranges: Record<string, Prisma.PersonalLogWhereInput> = {
+    minimal: { nlpScore: { gte: 0, lt: 5 } },
+    mild: { nlpScore: { gte: 5, lt: 10 } },
+    moderate: { nlpScore: { gte: 10, lt: 15 } },
+    mod_severe: { nlpScore: { gte: 15, lt: 20 } },
+    severe: { nlpScore: { gte: 20 } },
+  };
+  return ranges[phqBand] ?? null;
+}
+
+function userSearchWhere(
+  search: unknown,
+  profileClass: unknown,
+  alertLevel?: unknown,
+  phqBand?: unknown,
+  keyword?: unknown
+): Prisma.UserWhereInput {
   const q = typeof search === 'string' ? search.trim() : '';
   const cls = typeof profileClass === 'string' ? profileClass.trim() : '';
-  const where: Prisma.UserWhereInput = {};
+  const level = typeof alertLevel === 'string' ? alertLevel.trim() : '';
+  const band = typeof phqBand === 'string' ? phqBand.trim() : '';
+  const kw = typeof keyword === 'string' ? keyword.trim() : '';
+  const and: Prisma.UserWhereInput[] = [];
 
   if (q) {
-    where.OR = [
-      { username: { contains: q, mode: 'insensitive' } },
-      { email: { contains: q, mode: 'insensitive' } },
-      { displayName: { contains: q, mode: 'insensitive' } },
-      { city: { contains: q, mode: 'insensitive' } },
-    ];
+    and.push({
+      OR: [
+        { username: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { displayName: { contains: q, mode: 'insensitive' } },
+        { city: { contains: q, mode: 'insensitive' } },
+      ],
+    });
   }
 
   if (cls && cls !== 'all') {
-    where.profileClass = cls;
+    and.push({ profileClass: cls });
   }
 
-  return where;
+  if (level && level !== 'all') {
+    and.push({
+      OR: [
+        { personalLogs: { some: { alertLevel: level } } },
+        { chatInsights: { some: { alertLevel: level } } },
+      ],
+    });
+  }
+
+  if (band && band !== 'all') {
+    const bandWhere = phqBandWhere(band);
+    if (bandWhere) and.push({ personalLogs: { some: bandWhere } });
+  }
+
+  if (kw) {
+    and.push({ chatInsights: { some: { keywords: { has: kw } } } });
+  }
+
+  return and.length ? { AND: and } : {};
 }
 
 function normalizeNullableString(value: unknown, maxLength: number) {
@@ -140,7 +308,8 @@ export async function getAdminOverview(daysValue: unknown) {
     newUsers,
     activeUsers,
     totalLogs,
-    users,
+    allUsers,
+    newUserRows,
     logs,
     chatInsights,
     feedbacks,
@@ -166,6 +335,9 @@ export async function getAdminOverview(daysValue: unknown) {
       },
     }),
     prisma.personalLog.count(),
+    prisma.user.findMany({
+      select: { id: true, streak: true },
+    }),
     prisma.user.findMany({
       where: { createdAt: { gte: from } },
       select: { id: true, username: true, displayName: true, createdAt: true },
@@ -204,6 +376,7 @@ export async function getAdminOverview(daysValue: unknown) {
         rating: true,
         message: true,
         createdAt: true,
+        userId: true,
         user: { select: { id: true, username: true, displayName: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -215,19 +388,19 @@ export async function getAdminOverview(daysValue: unknown) {
     }),
     prisma.meditationSession.findMany({
       where: { startedAt: { gte: from } },
-      select: { startedAt: true, actualMin: true, completed: true },
+      select: { userId: true, startedAt: true, actualMin: true, completed: true },
     }),
     prisma.waterIntake.findMany({
       where: { date: { gte: from } },
-      select: { date: true, glasses: true, goal: true },
+      select: { userId: true, date: true, glasses: true, goal: true },
     }),
     prisma.stepCount.findMany({
       where: { date: { gte: from } },
-      select: { date: true, steps: true },
+      select: { userId: true, date: true, steps: true },
     }),
     prisma.sleepSession.findMany({
       where: { wakeTime: { gte: from } },
-      select: { wakeTime: true, duration: true },
+      select: { userId: true, wakeTime: true, duration: true },
     }),
   ]);
 
@@ -235,8 +408,27 @@ export async function getAdminOverview(daysValue: unknown) {
   const factorDistribution: Record<string, number> = {};
   const alertDistribution: Record<string, number> = {};
   const atRiskUserIds = new Set<string>();
+  const activeDayKeysByUser = new Map<string, Set<string>>();
+  const estimatedUsageMinutesByUser = new Map<string, number>();
 
-  for (const user of users) {
+  const markActivity = (userId: string, at: Date, estimatedMinutes: number) => {
+    const key = dateKeyUTC(at);
+    const row = timeline.get(key);
+    if (!row) return;
+
+    row.activeUserIds.add(userId);
+    row.estimatedUsageMinutes += Math.max(0, estimatedMinutes);
+
+    const activeDays = activeDayKeysByUser.get(userId) ?? new Set<string>();
+    activeDays.add(key);
+    activeDayKeysByUser.set(userId, activeDays);
+    estimatedUsageMinutesByUser.set(
+      userId,
+      (estimatedUsageMinutesByUser.get(userId) ?? 0) + Math.max(0, estimatedMinutes)
+    );
+  };
+
+  for (const user of newUserRows) {
     const row = timeline.get(dateKeyUTC(user.createdAt));
     if (row) row.signups += 1;
   }
@@ -249,6 +441,7 @@ export async function getAdminOverview(daysValue: unknown) {
       row.moodTotal += log.moodScore;
       row.moodCount += 1;
     }
+    markActivity(log.userId, log.createdAt, 6);
     increment(moodDistribution, log.mood);
     increment(alertDistribution, log.alertLevel ?? 'none');
     for (const factor of log.factors) increment(factorDistribution, factor);
@@ -257,13 +450,22 @@ export async function getAdminOverview(daysValue: unknown) {
 
   for (const insight of chatInsights) {
     const row = timeline.get(dateKeyUTC(insight.date));
-    if (row) row.chatAlertScore = Math.max(row.chatAlertScore ?? 0, insight.alertScore);
+    if (row) {
+      row.chatAlertScore = Math.max(row.chatAlertScore ?? 0, insight.alertScore);
+      row.chatMessages += insight.messageCount;
+    }
+    markActivity(insight.userId, insight.date, Math.min(90, insight.messageCount * 0.75));
     if (isElevatedAlert(insight.alertLevel)) atRiskUserIds.add(insight.userId);
+  }
+
+  for (const feedback of feedbacks) {
+    markActivity(feedback.userId, feedback.createdAt, 3);
   }
 
   for (const session of meditationSessions) {
     const row = timeline.get(dateKeyUTC(session.startedAt));
     if (row) row.meditationMinutes += session.actualMin;
+    markActivity(session.userId, session.startedAt, Math.max(1, session.actualMin));
   }
 
   for (const water of waterRows) {
@@ -272,29 +474,53 @@ export async function getAdminOverview(daysValue: unknown) {
       row.waterGlasses = (row.waterGlasses ?? 0) + water.glasses;
       row.waterGoal = (row.waterGoal ?? 0) + water.goal;
     }
+    markActivity(water.userId, water.date, 1.5);
   }
 
   for (const steps of stepRows) {
     const row = timeline.get(dateKeyUTC(steps.date));
     if (row) row.steps = (row.steps ?? 0) + steps.steps;
+    markActivity(steps.userId, steps.date, 1);
   }
 
   for (const sleep of sleepRows) {
     const row = timeline.get(dateKeyUTC(sleep.wakeTime));
     if (row) row.sleepMinutes = (row.sleepMinutes ?? 0) + sleep.duration;
+    markActivity(sleep.userId, sleep.wakeTime, 2);
   }
 
-  const series = Array.from(timeline.values()).map((row) => ({
-    ...row,
-    avgMood: row.moodCount ? round(row.moodTotal / row.moodCount) : null,
-    moodTotal: undefined,
-    moodCount: undefined,
-  }));
+  let cumulativeUsers = totalUsers - newUsers;
+  const series = Array.from(timeline.values()).map((row) => {
+    cumulativeUsers += row.signups;
+    return {
+      date: row.date,
+      signups: row.signups,
+      totalUsers: cumulativeUsers,
+      activeUsers: row.activeUserIds.size,
+      estimatedUsageHours: round(row.estimatedUsageMinutes / 60, 2),
+      chatMessages: row.chatMessages,
+      logs: row.logs,
+      avgMood: row.moodCount ? round(row.moodTotal / row.moodCount) : null,
+      steps: row.steps,
+      sleepMinutes: row.sleepMinutes,
+      waterGlasses: row.waterGlasses,
+      waterGoal: row.waterGoal,
+      meditationMinutes: row.meditationMinutes,
+      chatAlertScore: row.chatAlertScore,
+    };
+  });
 
   const moodScores = logs.map((log) => log.moodScore);
+  const streakValues = allUsers.map((user) => user.streak);
+  const activeDayCounts = Array.from(activeDayKeysByUser.values()).map((days) => days.size);
+  const estimatedUsageMinutes = Array.from(estimatedUsageMinutesByUser.values());
+  const regularThresholdDays = Math.max(2, Math.ceil(days * 0.25));
+  const regularUsers = activeDayCounts.filter((count) => count >= regularThresholdDays).length;
+  const totalEstimatedUsageMinutes = sum(estimatedUsageMinutes);
   const feedbackRatings = feedbacks.map((feedback) => feedback.rating);
   const meditationMinutes = meditationSessions.reduce((sum, session) => sum + session.actualMin, 0);
   const completedMeditations = meditationSessions.filter((session) => session.completed).length;
+  const dominantMood = topEntries(moodDistribution, 1)[0]?.label ?? null;
 
   return {
     range: {
@@ -309,6 +535,17 @@ export async function getAdminOverview(daysValue: unknown) {
       totalLogs,
       logsInRange: logs.length,
       avgMood: average(moodScores),
+      dominantMood,
+      avgStreak: average(streakValues),
+      maxStreak: maxValue(streakValues),
+      regularUsers,
+      regularThresholdDays,
+      regularAccessRate: activeUsers ? round((regularUsers / activeUsers) * 100) : null,
+      avgActiveDaysPerActiveUser: average(activeDayCounts),
+      totalEstimatedUsageHours: round(totalEstimatedUsageMinutes / 60, 2),
+      avgEstimatedUsageHoursPerActiveUser: activeUsers
+        ? round(totalEstimatedUsageMinutes / activeUsers / 60, 2)
+        : null,
       atRiskUsers: atRiskUserIds.size,
       feedbackCount: feedbacks.length,
       avgRating: average(feedbackRatings),
@@ -322,11 +559,24 @@ export async function getAdminOverview(daysValue: unknown) {
       mood: topEntries(moodDistribution),
       factors: topEntries(factorDistribution),
       alerts: topEntries(alertDistribution),
+      activityFrequency: bucketActivityFrequency(activeDayCounts),
       profileClass: profileGroups.map((group) => ({
         label: group.profileClass,
         count: group._count._all,
       })),
     },
+    dataQuality: [
+      {
+        key: 'usage-hours',
+        status: 'estimated',
+        message: 'No app session table yet. Usage hours are estimated from logs, chat daily insights, meditation, health records, and feedback events.',
+      },
+      {
+        key: 'login-streak',
+        status: 'missing',
+        message: 'No user login history yet. Average streak currently uses the log streak stored on User.streak.',
+      },
+    ],
     recentRisk: chatInsights.map((insight) => ({
       userId: insight.user.id,
       username: insight.user.username,
@@ -346,11 +596,20 @@ export async function listAdminUsers(query: {
   page?: unknown;
   limit?: unknown;
   profileClass?: unknown;
+  alertLevel?: unknown;
+  phqBand?: unknown;
+  keyword?: unknown;
 }) {
   const page = parseIntParam(query.page, 1, 5000);
   const limit = parseIntParam(query.limit, 20, 100);
   const skip = (page - 1) * limit;
-  const where = userSearchWhere(query.q, query.profileClass);
+  const where = userSearchWhere(
+    query.q,
+    query.profileClass,
+    query.alertLevel,
+    query.phqBand,
+    query.keyword
+  );
 
   const [total, users] = await Promise.all([
     prisma.user.count({ where }),
@@ -442,7 +701,8 @@ export async function listAdminUsers(query: {
         email: user.email,
         username: user.username,
         displayName: user.displayName,
-        avatar: user.avatar,
+        avatar: undefined,
+        hasAvatar: Boolean(user.avatar),
         bio: user.bio,
         ageGroup: user.ageGroup,
         city: user.city,
@@ -473,6 +733,90 @@ export async function listAdminUsers(query: {
       };
     }),
   };
+}
+
+async function refreshUserWellnessAggregates(userId: string) {
+  const from = rangeStart(MAX_DAYS);
+  const [logs, chatInsights] = await Promise.all([
+    prisma.personalLog.findMany({
+      where: { userId, createdAt: { gte: from } },
+      select: {
+        createdAt: true,
+        moodScore: true,
+        nlpScore: true,
+        alertLevel: true,
+      },
+    }),
+    prisma.chatInsight.findMany({
+      where: { userId, date: { gte: from } },
+      select: {
+        date: true,
+        alertLevel: true,
+        alertScore: true,
+        messageCount: true,
+        keywords: true,
+      },
+    }),
+  ]);
+
+  const buckets = new Map<string, WellnessAggregateBucket>();
+
+  logs.forEach((log) => {
+    pushToAggregateBuckets(buckets, log.createdAt, (bucket) => {
+      if (typeof log.nlpScore === 'number') bucket.phqScores.push(log.nlpScore);
+      bucket.moodScores.push(log.moodScore);
+      increment(bucket.alertCounts, log.alertLevel ?? 'none');
+    });
+  });
+
+  chatInsights.forEach((insight) => {
+    pushToAggregateBuckets(buckets, insight.date, (bucket) => {
+      bucket.chatScores.push(insight.alertScore);
+      bucket.chatMessageCount += insight.messageCount;
+      increment(bucket.alertCounts, insight.alertLevel ?? 'none');
+      insight.keywords.forEach((keyword) => increment(bucket.keywordCounts, keyword));
+    });
+  });
+
+  await Promise.all(
+    Array.from(buckets.values()).map((bucket) => {
+      const data = {
+        periodEnd: bucket.periodEnd,
+        avgPhqScore: average(bucket.phqScores),
+        maxPhqScore: maxValue(bucket.phqScores),
+        avgMoodScore: average(bucket.moodScores),
+        dominantAlertLevel: dominantLabel(bucket.alertCounts),
+        logCount: bucket.moodScores.length,
+        chatAlertAvg: average(bucket.chatScores),
+        chatAlertMax: maxValue(bucket.chatScores),
+        chatMessageCount: bucket.chatMessageCount,
+        topKeywords: topLabels(bucket.keywordCounts),
+      };
+
+      return prisma.userWellnessAggregate.upsert({
+        where: {
+          userId_periodType_periodStart: {
+            userId,
+            periodType: bucket.periodType,
+            periodStart: bucket.periodStart,
+          },
+        },
+        create: {
+          userId,
+          periodType: bucket.periodType,
+          periodStart: bucket.periodStart,
+          ...data,
+        },
+        update: data,
+      });
+    })
+  );
+
+  return prisma.userWellnessAggregate.findMany({
+    where: { userId },
+    orderBy: [{ periodType: 'asc' }, { periodStart: 'desc' }],
+    take: 80,
+  });
 }
 
 export async function getAdminUserTracking(userId: string, daysValue: unknown) {
@@ -507,6 +851,8 @@ export async function getAdminUserTracking(userId: string, daysValue: unknown) {
         lastLogDate: true,
         profileClass: true,
         profileClassUpdatedAt: true,
+        passwordResetToken: true,
+        passwordResetExpires: true,
         createdAt: true,
         mediaKeyVersion: true,
         mediaKeySalt: true,
@@ -625,6 +971,11 @@ export async function getAdminUserTracking(userId: string, daysValue: unknown) {
 
   if (!user) throw new HttpError(404, 'User not found');
 
+  const [wellnessAggregates, activeRecoveryRequest] = await Promise.all([
+    refreshUserWellnessAggregates(userId),
+    findActiveRecoveryRequestForUser(userId),
+  ]);
+
   const moodDistribution: Record<string, number> = {};
   const factorDistribution: Record<string, number> = {};
   const alertDistribution: Record<string, number> = {};
@@ -699,9 +1050,27 @@ export async function getAdminUserTracking(userId: string, daysValue: unknown) {
     },
     user: {
       ...user,
+      avatar: undefined,
+      hasAvatar: Boolean(user.avatar),
       hasMediaKey: Boolean(user.mediaKeySalt && user.encryptedMediaKey),
       mediaKeySalt: undefined,
       encryptedMediaKey: undefined,
+      passwordResetToken: undefined,
+      passwordResetExpires: undefined,
+      passwordResetRequested: Boolean(
+        activeRecoveryRequest
+      ),
+      passwordResetExpiresAt: activeRecoveryRequest?.expiresAt ?? null,
+      activeRecoveryRequest: activeRecoveryRequest
+        ? {
+            id: activeRecoveryRequest.id,
+            status: activeRecoveryRequest.status,
+            reason: activeRecoveryRequest.reason,
+            requestedAt: activeRecoveryRequest.requestedAt,
+            pinVerifiedAt: activeRecoveryRequest.pinVerifiedAt,
+            expiresAt: activeRecoveryRequest.expiresAt,
+          }
+        : null,
     },
     summary: {
       logs: logs.length,
@@ -721,6 +1090,9 @@ export async function getAdminUserTracking(userId: string, daysValue: unknown) {
         : null,
       feedbackCount: feedbacks.length,
       avgRating: average(feedbackRatings),
+    },
+    aggregates: {
+      phqByPeriod: wellnessAggregates,
     },
     series,
     distributions: {
@@ -818,18 +1190,54 @@ export async function updateAdminUser(userId: string, input: Record<string, unkn
   }
 }
 
-export async function resetAdminUserPassword(userId: string, input: { newPassword?: unknown }) {
+export async function resetAdminUserPassword(
+  userId: string,
+  input: { newPassword?: unknown },
+  options: { actorAdminId?: string | null; requireVerifiedRecoveryRequest?: boolean } = {}
+) {
   const password = typeof input.newPassword === 'string' ? input.newPassword : '';
   if (password.length < 6) {
     throw new HttpError(400, 'New password must be at least 6 characters');
   }
 
-  await prisma.user.update({
+  const user = await prisma.user.findUnique({
     where: { id: userId },
-    data: { password: await bcrypt.hash(password, 10) },
+    select: {
+      id: true,
+    },
   });
 
-  return { ok: true };
+  if (!user) throw new HttpError(404, 'User not found');
+
+  const activeRecoveryRequest = await findActiveRecoveryRequestForUser(userId);
+
+  if (options.requireVerifiedRecoveryRequest && !activeRecoveryRequest) {
+    throw new HttpError(403, 'User password can only be reset after a PIN-verified recovery request');
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.user.update({
+      where: { id: userId },
+      data: {
+        password: await bcrypt.hash(password, 10),
+        passwordResetToken: null,
+        passwordResetExpires: null,
+      },
+    });
+
+    if (activeRecoveryRequest) {
+      await tx.accountRecoveryRequest.update({
+        where: { id: activeRecoveryRequest.id },
+        data: {
+          status: 'COMPLETED',
+          reviewedByAdminId: options.actorAdminId ?? null,
+          completedAt: new Date(),
+        },
+      });
+    }
+  });
+
+  return { ok: true, recoveryRequestId: activeRecoveryRequest?.id ?? null };
 }
 
 export async function refreshAdminUserProfileClass(userId: string) {
