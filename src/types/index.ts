@@ -21,6 +21,7 @@ export interface ForgotPasswordInput {
 }
 
 export interface ResetPasswordInput {
+  email?: string;
   token?: string;
   newPassword?: string;
 }

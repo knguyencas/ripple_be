@@ -124,7 +124,7 @@ export const requestPasswordReset = async (input: ForgotPasswordInput) => {
     return { ok: true };
   }
 
-  const token = crypto.randomBytes(32).toString('hex');
+  const token = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
 
   await prisma.user.update({
@@ -160,15 +160,18 @@ export const resetUserPassword = async (input: ResetPasswordInput) => {
     throw new Error('Mật khẩu mới tối thiểu 6 ký tự');
   }
 
-  const user = await prisma.user.findUnique({ where: { passwordResetToken: token } });
-  if (!user) throw new Error('Link khôi phục không hợp lệ hoặc đã được sử dụng');
+  const email = typeof input.email === 'string' ? input.email.trim().toLowerCase() : '';
+  if (!email) throw new Error('Vui lòng nhập email');
+
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user || user.passwordResetToken !== token) throw new Error('Mã xác nhận không đúng');
 
   if (!user.passwordResetExpires || user.passwordResetExpires.getTime() < Date.now()) {
     await prisma.user.update({
       where: { id: user.id },
       data: { passwordResetToken: null, passwordResetExpires: null },
     });
-    throw new Error('Link khôi phục đã hết hạn. Vui lòng yêu cầu link mới.');
+    throw new Error('Mã xác nhận đã hết hạn. Vui lòng yêu cầu mã mới.');
   }
 
   const hashed = await bcrypt.hash(newPassword, 10);

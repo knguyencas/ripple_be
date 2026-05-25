@@ -21,29 +21,28 @@ function getTransporter(): nodemailer.Transporter {
   return cachedTransporter;
 }
 
-export async function sendPasswordResetEmail(toEmail: string, resetToken: string) {
+export async function sendPasswordResetEmail(toEmail: string, code: string) {
   const transporter = getTransporter();
-  const linkBase = process.env['APP_RESET_LINK_BASE'] || 'ripple://auth/reset-password';
-  const resetLink = `${linkBase}?token=${encodeURIComponent(resetToken)}`;
   const fromAddress = process.env['GMAIL_USER'] || 'noreply@ripple.app';
 
   await transporter.sendMail({
     from: `"Ripple" <${fromAddress}>`,
     to: toEmail,
-    subject: 'Khôi phục mật khẩu Ripple',
+    subject: 'Mã xác nhận khôi phục mật khẩu Ripple',
     text: [
       'Xin chào,',
       '',
-      'Bạn (hoặc ai đó) vừa yêu cầu khôi phục mật khẩu cho tài khoản Ripple của bạn.',
+      'Bạn vừa yêu cầu khôi phục mật khẩu cho tài khoản Ripple.',
       '',
-      'Nhấn vào link dưới để đặt mật khẩu mới (hoặc copy vào trình duyệt nếu link không tự mở app):',
-      resetLink,
+      'Mã xác nhận của bạn là:',
       '',
-      'Link có hiệu lực trong 60 phút.',
+      `  ${code}`,
+      '',
+      'Mã có hiệu lực trong 60 phút.',
       '',
       'Nếu bạn không yêu cầu khôi phục, hãy bỏ qua email này — mật khẩu hiện tại vẫn an toàn.',
       '',
-      'Lưu ý: PIN mã hoá nhật ký KHÔNG được reset qua email này. Nếu bạn quên PIN, không có cách khôi phục.',
+      'Lưu ý: PIN mã hoá nhật ký KHÔNG được reset qua email này.',
       '',
       'Ripple',
     ].join('\n'),
